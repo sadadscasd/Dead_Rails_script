@@ -1,6 +1,10 @@
 local AUTO_FARM_ENABLED = true
 local CHECK_INTERVAL = 2
 
+-- Конфигурация активации
+local ACTIVATION_KEY = "DEADRAILS123" -- Ваш ключ активации
+local ACTIVATION_REQUIRED = true -- Требовать активацию
+
 -- Инициализация глобальных переменных
 if not getgenv().AutoFarmData then
     getgenv().AutoFarmData = {
@@ -13,7 +17,8 @@ if not getgenv().AutoFarmData then
         MaxErrors = 3,
         ErrorCooldown = 5,
         GunSearchTimeout = 20,
-        SafetyChecks = true -- Добавляем флаг безопасности
+        SafetyChecks = true,
+        Activated = false -- Флаг активации
     }
 end
 
@@ -23,17 +28,161 @@ local Workspace = game:GetService("Workspace")
 local TweenService = game:GetService("TweenService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
+local CoreGui = game:GetService("CoreGui")
+local UserInputService = game:GetService("UserInputService")
 
--- Константы
-local BOND_NAME = "Bond"
-local GUN_NAME = "MaximGun"
-local REMOTES_PATH = {"Remotes", "EndDecision"}
-local ACTIVATE_PATH = {"Shared", "Network", "RemotePromise", "Remotes", "C_ActivateObject"}
-local ERROR_PATTERNS = {
-    "attempt to iterate over a nil value",
-    "WeaponController",
-    "ReplicatedStorage.Client.Game.Controllers"
-}
+-- UI функции
+local function createActivationUI()
+    -- Очищаем старый UI если есть
+    if getgenv().ActivationUI then
+        pcall(function()
+            getgenv().ActivationUI:Destroy()
+        end)
+    end
+
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "AutoFarmActivation"
+    screenGui.Parent = CoreGui
+    screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    screenGui.ResetOnSpawn = false
+
+    local mainFrame = Instance.new("Frame")
+    mainFrame.Size = UDim2.new(0, 350, 0, 200)
+    mainFrame.Position = UDim2.new(0.5, -175, 0.5, -100)
+    mainFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+    mainFrame.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+    mainFrame.BorderSizePixel = 0
+    mainFrame.Parent = screenGui
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 8)
+    corner.Parent = mainFrame
+
+    local title = Instance.new("TextLabel")
+    title.Size = UDim2.new(1, 0, 0, 40)
+    title.Position = UDim2.new(0, 0, 0, 0)
+    title.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    title.Text = "Активация AutoFarm"
+    title.TextColor3 = Color3.fromRGB(255, 255, 255)
+    title.Font = Enum.Font.GothamBold
+    title.TextSize = 16
+    title.Parent = mainFrame
+
+    local titleCorner = Instance.new("UICorner")
+    titleCorner.CornerRadius = UDim.new(0, 8)
+    titleCorner.Parent = title
+
+    local inputFrame = Instance.new("Frame")
+    inputFrame.Size = UDim2.new(0.8, 0, 0, 40)
+    inputFrame.Position = UDim2.new(0.1, 0, 0.3, 0)
+    inputFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+    inputFrame.BorderSizePixel = 0
+    inputFrame.Parent = mainFrame
+
+    local inputCorner = Instance.new("UICorner")
+    inputCorner.CornerRadius = UDim.new(0, 6)
+    inputCorner.Parent = inputFrame
+
+    local textBox = Instance.new("TextBox")
+    textBox.Size = UDim2.new(1, -20, 1, 0)
+    textBox.Position = UDim2.new(0, 10, 0, 0)
+    textBox.BackgroundTransparency = 1
+    textBox.Text = ""
+    textBox.PlaceholderText = "Введите ключ активации..."
+    textBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+    textBox.Font = Enum.Font.Gotham
+    textBox.TextSize = 14
+    textBox.ClearTextOnFocus = false
+    textBox.Parent = inputFrame
+
+    local statusLabel = Instance.new("TextLabel")
+    statusLabel.Size = UDim2.new(1, 0, 0, 20)
+    statusLabel.Position = UDim2.new(0, 0, 0.6, 0)
+    statusLabel.BackgroundTransparency = 1
+    statusLabel.Text = ""
+    statusLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
+    statusLabel.Font = Enum.Font.Gotham
+    statusLabel.TextSize = 12
+    statusLabel.Parent = mainFrame
+
+    local activateButton = Instance.new("TextButton")
+    activateButton.Size = UDim2.new(0.4, 0, 0, 35)
+    activateButton.Position = UDim2.new(0.3, 0, 0.75, 0)
+    activateButton.BackgroundColor3 = Color3.fromRGB(0, 120, 255)
+    activateButton.Text = "Активировать"
+    activateButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    activateButton.Font = Enum.Font.GothamBold
+    activateButton.TextSize = 14
+    activateButton.Parent = mainFrame
+
+    local buttonCorner = Instance.new("UICorner")
+    buttonCorner.CornerRadius = UDim.new(0, 6)
+    buttonCorner.Parent = activateButton
+
+    -- Функция проверки ключа
+    local function checkKey(key)
+        return key == ACTIVATION_KEY
+    end
+
+    -- Обработчик активации
+    activateButton.MouseButton1Click:Connect(function()
+        local key = textBox.Text:gsub("%s+", "") -- Убираем пробелы
+        if checkKey(key) then
+            getgenv().AutoFarmData.Activated = true
+            statusLabel.Text = "✅ Активация успешна!"
+            statusLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
+            
+            -- Плавное исчезновение UI
+            local tween = TweenService:Create(mainFrame, TweenInfo.new(0.5, Enum.EasingStyle.Quad), {
+                Position = UDim2.new(0.5, -175, -0.5, -100)
+            })
+            tween:Play()
+            
+            tween.Completed:Connect(function()
+                screenGui:Destroy()
+                getgenv().ActivationUI = nil
+            end)
+        else
+            statusLabel.Text = "❌ Неверный ключ активации!"
+            statusLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
+        end
+    end)
+
+    -- Закрытие по ESC
+    local connection
+    connection = UserInputService.InputBegan:Connect(function(input)
+        if input.KeyCode == Enum.KeyCode.Escape then
+            connection:Disconnect()
+            screenGui:Destroy()
+            getgenv().ActivationUI = nil
+        end
+    end)
+
+    getgenv().ActivationUI = screenGui
+    return screenGui
+end
+
+-- Функция проверки активации
+local function checkActivation()
+    if not ACTIVATION_REQUIRED then
+        getgenv().AutoFarmData.Activated = true
+        return true
+    end
+    
+    if getgenv().AutoFarmData.Activated then
+        return true
+    end
+    
+    createActivationUI()
+    
+    -- Ждем активации
+    local startTime = tick()
+    while tick() - startTime < 300 and not getgenv().AutoFarmData.Activated do -- 5 минут таймаут
+        task.wait(1)
+    end
+    
+    return getgenv().AutoFarmData.Activated
+end
 
 -- Улучшенная функция для безопасного добавления соединений
 local function manageConnection(connection, key)
@@ -76,6 +225,17 @@ local function safeWait(duration)
     end
     return AUTO_FARM_ENABLED
 end
+
+-- Константы
+local BOND_NAME = "Bond"
+local GUN_NAME = "MaximGun"
+local REMOTES_PATH = {"Remotes", "EndDecision"}
+local ACTIVATE_PATH = {"Shared", "Network", "RemotePromise", "Remotes", "C_ActivateObject"}
+local ERROR_PATTERNS = {
+    "attempt to iterate over a nil value",
+    "WeaponController",
+    "ReplicatedStorage.Client.Game.Controllers"
+}
 
 -- Функция для проверки, содержит ли текст ошибку из нашего списка
 local function isTargetError(message)
@@ -153,6 +313,12 @@ local function isValidPart(part)
 end
 
 local function initializeAutoFarm()
+    -- Проверяем активацию перед запуском
+    if not checkActivation() then
+        warn("Активация не пройдена. Скрипт отключен.")
+        return
+    end
+    
     if getgenv().AutoFarmData.Initialized then return end
     getgenv().AutoFarmData.Initialized = true
     
