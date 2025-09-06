@@ -13,7 +13,7 @@ if not getgenv().AutoFarmData then
         MaxErrors = 3,
         ErrorCooldown = 5,
         GunSearchTimeout = 20,
-        SafetyChecks = true
+        SafetyChecks = true -- Добавляем флаг безопасности
     }
 end
 
@@ -35,13 +35,20 @@ local ERROR_PATTERNS = {
     "ReplicatedStorage.Client.Game.Controllers"
 }
 
--- Функция для безопасного добавления и управления соединениями
+-- Улучшенная функция для безопасного добавления соединений
 local function manageConnection(connection, key)
-    if key and getgenv().AutoFarmData.Connections[key] then
-        getgenv().AutoFarmData.Connections[key]:Disconnect()
+    if not AUTO_FARM_ENABLED then 
+        if connection then connection:Disconnect() end
+        return 
     end
     
-    if key then
+    if key and getgenv().AutoFarmData.Connections[key] then
+        pcall(function()
+            getgenv().AutoFarmData.Connections[key]:Disconnect()
+        end)
+    end
+    
+    if key and connection then
         getgenv().AutoFarmData.Connections[key] = connection
     end
     
@@ -52,10 +59,22 @@ end
 local function cleanupConnections()
     for key, connection in pairs(getgenv().AutoFarmData.Connections) do
         if connection and typeof(connection) == "RBXScriptConnection" then
-            connection:Disconnect()
+            pcall(function()
+                connection:Disconnect()
+            end)
         end
         getgenv().AutoFarmData.Connections[key] = nil
     end
+end
+
+-- Безопасная функция ожидания
+local function safeWait(duration)
+    if not AUTO_FARM_ENABLED then return false end
+    local start = tick()
+    while tick() - start < duration and AUTO_FARM_ENABLED do
+        task.wait(0.1)
+    end
+    return AUTO_FARM_ENABLED
 end
 
 -- Функция для проверки, содержит ли текст ошибку из нашего списка
@@ -108,6 +127,7 @@ end
 
 -- Оптимизированная функция поиска в иерархии
 local function findInHierarchy(parent, path)
+    if not parent then return nil end
     local current = parent
     for _, name in ipairs(path) do
         current = current:FindFirstChild(name)
@@ -116,7 +136,7 @@ local function findInHierarchy(parent, path)
     return current
 end
 
--- Оптимизированная функция безопасного вызова
+-- Улучшенная функция безопасного вызова
 local function safeCall(func, ...)
     if not AUTO_FARM_ENABLED then return false end
     local success, result = pcall(func, ...)
@@ -127,16 +147,12 @@ local function safeCall(func, ...)
     return true
 end
 
--- Функция для проверки, нужно ли перезапускать скрипт
-local function shouldRestartScript()
-    if not getgenv().AutoFarmData then return true end
-    if game.PlaceId ~= getgenv().AutoFarmData.GamePlaceId then return true end
-    if not getgenv().AutoFarmData.IsInGame then return true end
-    return false
+-- Безопасная проверка объекта
+local function isValidPart(part)
+    return part and part.Parent and part:IsA("BasePart")
 end
 
--- Основная функция скрипта
-local function main()
+local function initializeAutoFarm()
     if getgenv().AutoFarmData.Initialized then return end
     getgenv().AutoFarmData.Initialized = true
     
@@ -145,7 +161,7 @@ local function main()
     while AUTO_FARM_ENABLED do
         if not getgenv().AutoFarmData.GamePlaceId then
             while game.PlaceId == 0 and AUTO_FARM_ENABLED do
-                task.wait(1)
+                safeWait(1)
             end
             if AUTO_FARM_ENABLED then
                 getgenv().AutoFarmData.GamePlaceId = game.PlaceId
@@ -167,7 +183,7 @@ local function main()
                 while not EndDecision and tick() - startTime < maxWaitTime and AUTO_FARM_ENABLED do
                     EndDecision = findInHierarchy(ReplicatedStorage, REMOTES_PATH)
                     if not EndDecision then
-                        task.wait(1)
+                        safeWait(1)
                     end
                 end
                 
@@ -176,6 +192,8 @@ local function main()
                 end
 
                 local player = Players.LocalPlayer
+                if not player then return end
+                
                 getgenv().autoFarmBond = true
                 getgenv().CollectBond = true
                 
@@ -203,49 +221,76 @@ local function main()
 
                 local function teleportTo(root, cf)
                     return safeCall(function()
-                        if not root or not root.Parent then return end
+                        if not isValidPart(root) then return false end
                         root.Anchored = true
                         root.CFrame = cf
-                        task.wait(3)
-                        if root and root.Parent then
+                        safeWait(3)
+                        if isValidPart(root) then
                             root.Anchored = false
                         end
+                        return true
                     end)
                 end
 
                 local function tweenTo(root, cf)
                     return safeCall(function()
-                        if not root or not root.Parent then return end
+                        if not isValidPart(root) then return false end
                         local distance = (root.Position - cf.Position).Magnitude
-                        local duration = distance / tweenSpeed
+                        local duration = math.max(0.1, distance / tweenSpeed)
                         local tween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Linear), {CFrame = cf})
                         tween:Play()
-                        task.wait(duration)
+                        safeWait(duration)
+                        return true
                     end)
                 end
 
-                local function getLockedGun()
-                    local runtime = Workspace:FindFirstChild("RuntimeItems")
-                    if not runtime then return nil end
+                -- Модифицированная функция поиска пушки с таймаутом
+                local function getLockedGunWithTimeout(timeout)
+                    local startTime = tick()
+                    local gunFound = false
+                    local foundGun = nil
                     
-                    for _, v in ipairs(runtime:GetChildren()) do
-                        if v:IsA("Model") and v.Name == GUN_NAME then
-                            if (v:GetPivot().Position - gunCFrame.Position).Magnitude <= rangeMaxGun then
-                                return v
+                    while not gunFound and tick() - startTime < timeout and AUTO_FARM_ENABLED do
+                        local runtime = Workspace:FindFirstChild("RuntimeItems")
+                        if runtime then
+                            for _, v in ipairs(runtime:GetChildren()) do
+                                if not AUTO_FARM_ENABLED then break end
+                                if v:IsA("Model") and v.Name == GUN_NAME and v:FindFirstChild("VehicleSeat") then
+                                    local seat = v:FindFirstChild("VehicleSeat")
+                                    if seat and seat:IsA("VehicleSeat") then
+                                        if (v:GetPivot().Position - gunCFrame.Position).Magnitude <= rangeMaxGun then
+                                            foundGun = v
+                                            gunFound = true
+                                            break
+                                        end
+                                    end
+                                end
                             end
                         end
+                        if not gunFound then
+                            safeWait(0.5)
+                        end
                     end
-                    return nil
+                    
+                    return foundGun
                 end
 
                 local function sitInGun(root)
-                    local gun = getLockedGun()
-                    if not gun then return false end
+                    if not isValidPart(root) then return false end
+                    
+                    local gun = getLockedGunWithTimeout(getgenv().AutoFarmData.GunSearchTimeout)
+                    if not gun then 
+                        warn("Таймаут поиска пушки! Пушка не найдена за "..getgenv().AutoFarmData.GunSearchTimeout.." секунд")
+                        return false 
+                    end
+                    
                     local seat = gun:FindFirstChild("VehicleSeat")
                     if seat and seat:IsA("VehicleSeat") then
-                        if seat.Disabled then seat.Disabled = false end
-                        teleportTo(root, seat.CFrame)
-                        return true
+                        if seat.Disabled then 
+                            seat.Disabled = false 
+                            safeWait(0.5)
+                        end
+                        return teleportTo(root, seat.CFrame)
                     end
                     return false
                 end
@@ -259,21 +304,23 @@ local function main()
                 end
 
                 local function freezeMidAir(root)
-                    safeCall(function()
-                        if not root or not root.Parent then return end
+                    return safeCall(function()
+                        if not isValidPart(root) then return false end
                         root.Anchored = true
                         root.CFrame = CFrame.new(root.Position + Vector3.new(0, 5, 0))
-                        task.wait(1)
-                        if root and root.Parent then
+                        safeWait(1)
+                        if isValidPart(root) then
                             root.Anchored = false
                         end
+                        return true
                     end)
                 end
 
                 local function tryTweenToBond(root)
+                    if not isValidPart(root) then return false end
+                    
                     local found = false
                     safeCall(function()
-                        if not root or not root.Parent then return end
                         local runtime = Workspace:FindFirstChild("RuntimeItems")
                         if runtime then
                             for _, v in ipairs(runtime:GetChildren()) do
@@ -290,18 +337,37 @@ local function main()
                 end
 
                 local function setupGun(root, humanoid)
-                    safeCall(function()
-                        if not root or not root.Parent then return end
+                    if not isValidPart(root) or not humanoid then return false end
+                    
+                    local success = safeCall(function()
                         teleportTo(root, gunCFrame)
-                        if sitInGun(root) then
-                            task.wait(0.6)
-                            jumpOff(humanoid)
-                            freezeMidAir(root)
-                            task.wait(0.5)
-                            sitInGun(root)
-                            task.wait(0.1)
+                        
+                        -- Пытаемся сесть в пушку с таймаутом
+                        local gunSuccess = sitInGun(root)
+                        if not gunSuccess then
+                            warn("Не удалось сесть в пушку, убиваем персонажа...")
+                            humanoid:ChangeState(Enum.HumanoidStateType.Dead)
+                            return false
                         end
+                        
+                        safeWait(0.6)
+                        jumpOff(humanoid)
+                        freezeMidAir(root)
+                        safeWait(0.5)
+                        
+                        -- Вторая попытка сесть в пушку
+                        gunSuccess = sitInGun(root)
+                        if not gunSuccess then
+                            warn("Не удалось сесть в пушку после прыжка, убиваем персонажа...")
+                            humanoid:ChangeState(Enum.HumanoidStateType.Dead)
+                            return false
+                        end
+                        
+                        safeWait(0.1)
+                        return true
                     end)
+                    
+                    return success or false
                 end
 
                 -- Collect Bond с оптимизацией
@@ -309,56 +375,57 @@ local function main()
                 local activateRemote = findInHierarchy(ReplicatedStorage, ACTIVATE_PATH)
                 
                 manageConnection(RunService.Heartbeat:Connect(function()
-                    if not AUTO_FARM_ENABLED then return end
-                    if getgenv().CollectBond and tick() - lastCollectTime >= collectDelay then
-                        lastCollectTime = tick()
-                        safeCall(function()
-                            local char = player.Character
-                            if char then
-                                local runtime = Workspace:FindFirstChild("RuntimeItems")
-                                if runtime then
-                                    for _, bond in ipairs(runtime:GetChildren()) do
-                                        if not AUTO_FARM_ENABLED then break end
-                                        if bond:IsA("Model") and bond.Name == BOND_NAME then
-                                            local remote = ReplicatedStorage:FindFirstChild("Shared")
-                                            if remote then
-                                                remote = remote:FindFirstChild("Network")
-                                                if remote then
-                                                    remote = remote:FindFirstChild("RemotePromise")
-                                                    if remote then
-                                                        remote = remote:FindFirstChild("Remotes")
-                                                        if remote then
-                                                            remote = remote:FindFirstChild("C_ActivateObject")
-                                                            if remote then
-                                                                remote:FireServer(bond)
-                                                            end
-                                                        end
-                                                    end
-                                                end
-                                            end
-                                        end
-                                    end
-                                end
+                    if not AUTO_FARM_ENABLED or not getgenv().CollectBond then return end
+                    
+                    local currentTime = tick()
+                    if currentTime - lastCollectTime < collectDelay then return end
+                    lastCollectTime = currentTime
+                    
+                    safeCall(function()
+                        local runtime = Workspace:FindFirstChild("RuntimeItems")
+                        if not runtime or not activateRemote then return end
+                        
+                        for _, bond in ipairs(runtime:GetChildren()) do
+                            if not AUTO_FARM_ENABLED then break end
+                            if bond:IsA("Model") and bond.Name == BOND_NAME then
+                                activateRemote:FireServer(bond)
+                                break -- Собираем только один бонд за раз
                             end
-                        end)
-                    end
+                        end
+                    end)
                 end), "collect_connection")
 
                 -- фарм на персонаже
                 local function farmCharacter(character)
-                    if not character then return end
+                    if not character or not character.Parent then return end
                     
-                    local root = character:WaitForChild("HumanoidRootPart", 10)
-                    local humanoid = character:WaitForChild("Humanoid", 10)
+                    -- Ждем с таймаутом и проверками
+                    local startTime = tick()
+                    local root, humanoid
                     
-                    if not root or not humanoid then return end
+                    while tick() - startTime < 15 and AUTO_FARM_ENABLED do
+                        root = character:FindFirstChild("HumanoidRootPart")
+                        humanoid = character:FindFirstChild("Humanoid")
+                        
+                        if root and humanoid and humanoid.Health > 0 then
+                            break
+                        end
+                        safeWait(0.1)
+                    end
+                    
+                    if not root or not humanoid or humanoid.Health <= 0 then
+                        return
+                    end
                     
                     local currentIndex = 1
                     local started = false
 
                     while humanoid.Health > 0 and AUTO_FARM_ENABLED and getgenv().AutoFarmData.IsInGame do
                         if not started then
-                            setupGun(root, humanoid)
+                            local setupSuccess = setupGun(root, humanoid)
+                            if not setupSuccess then
+                                break
+                            end
                             started = true
                         end
 
@@ -369,28 +436,28 @@ local function main()
                                 currentIndex = currentIndex + 1
                             else
                                 safeCall(function()
-                                    humanoid:ChangeState(Enum.HumanoidStateType.Dead)
+                                    if humanoid and humanoid.Parent then
+                                        humanoid:ChangeState(Enum.HumanoidStateType.Dead)
+                                    end
                                 end)
                                 break
                             end
                         end
-                        task.wait(0.3)
+                        safeWait(0.3)
                     end
                 end
 
-                -- асинхронное ожидание респавна
-                local function onCharacter(character)
-                    task.spawn(function()
+                -- Безопасный обработчик добавления персонажа
+                manageConnection(player.CharacterAdded:Connect(function(character)
+                    if AUTO_FARM_ENABLED then
+                        safeWait(2) -- Даем время на загрузку персонажа
                         farmCharacter(character)
-                    end)
-                end
+                    end
+                end), "character_added")
 
-                -- подключаемся к CharacterAdded
-                manageConnection(player.CharacterAdded:Connect(onCharacter), "character_added")
-
-                -- если персонаж уже есть
                 if player.Character then
-                    onCharacter(player.Character)
+                    safeWait(2)
+                    farmCharacter(player.Character)
                 end
 
                 -- EndDecision Loop
@@ -402,79 +469,56 @@ local function main()
                                 EndDecision:FireServer(false)
                             end)
                         end
-                        task.wait(0.5)
+                        safeWait(0.5)
                     end
                 end)
 
-                -- Отслеживаем выход из игры
                 manageConnection(Players.LocalPlayer:GetPropertyChangedSignal("UserId"):Connect(function()
                     if game.PlaceId ~= getgenv().AutoFarmData.GamePlaceId then
                         getgenv().AutoFarmData.IsInGame = false
-                        if endDecisionTask then
-                            task.cancel(endDecisionTask)
-                        end
                     end
                 end), "userid_changed")
 
-                -- Ждем пока находимся в игре
                 while getgenv().AutoFarmData.IsInGame and AUTO_FARM_ENABLED do
-                    task.wait(1)
+                    safeWait(1)
                 end
 
-                -- Очищаем соединения при выходе
                 cleanupConnections()
-                if endDecisionTask then
-                    task.cancel(endDecisionTask)
-                end
             end)
             
             if not success then
                 warn("Ошибка в автофарме:", err)
             end
         else
-            -- Мы не в игре, ждем перехода
             warn("Ожидание перехода в игру... Текущее место:", game.PlaceId)
             getgenv().AutoFarmData.IsInGame = false
-            task.wait(CHECK_INTERVAL)
+            safeWait(CHECK_INTERVAL)
         end
-        
-        -- Проверяем, нужно ли перезапускать скрипт
-        if shouldRestartScript() then
-            warn("Обнаружена перезагрузка игры, реинициализируем скрипт...")
-            getgenv().AutoFarmData.Initialized = false
-            getgenv().AutoFarmData.IsInGame = false
-            cleanupConnections()
-            break
-        end
-        
-        task.wait(5)
     end
 end
 
--- Запуск с возможностью рестарта
-while AUTO_FARM_ENABLED do
-    local success, err = pcall(main)
+-- Запуск с защитой от ошибок
+local function safeInitialize()
+    local success, err = pcall(initializeAutoFarm)
     if not success then
-        warn("Ошибка в основном цикле:", err)
+        warn("Критическая ошибка инициализации:", err)
         cleanupConnections()
     end
-    task.wait(2) -- Ждем перед перезапуском
 end
 
--- Дополнительный мониторинг для надежности
+safeInitialize()
+
 task.spawn(function()
     while AUTO_FARM_ENABLED do
-        -- Периодически проверяем, не изменился ли PlaceId игры
         if getgenv().AutoFarmData.GamePlaceId and game.PlaceId ~= 0 and game.PlaceId ~= getgenv().AutoFarmData.GamePlaceId then
-            warn("Обнаружен новый PlaceId. Обновляем... Старый:", getgenv().AutoFarmData.GamePlaceId, "Новый:", game.PlaceId)
+            warn("Обнаружен новый PlaceId. Обновляем...")
             getgenv().AutoFarmData.GamePlaceId = game.PlaceId
         end
         
-        -- Обновляем статус нахождения в игре
         if getgenv().AutoFarmData.GamePlaceId then
             getgenv().AutoFarmData.IsInGame = game.PlaceId == getgenv().AutoFarmData.GamePlaceId
         end
         
-        task.wait(5)
+        safeWait(5)
     end
 end)
