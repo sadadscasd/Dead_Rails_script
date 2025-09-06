@@ -18,7 +18,8 @@ if not getgenv().AutoFarmData then
         ErrorCooldown = 5,
         GunSearchTimeout = 20,
         SafetyChecks = true,
-        Activated = false -- Флаг активации
+        Activated = false, -- Флаг активации
+        ActivationUIVisible = false -- Флаг видимости UI
     }
 end
 
@@ -141,6 +142,7 @@ local function createActivationUI()
             tween.Completed:Connect(function()
                 screenGui:Destroy()
                 getgenv().ActivationUI = nil
+                getgenv().AutoFarmData.ActivationUIVisible = false
             end)
         else
             statusLabel.Text = "❌ Неверный ключ активации!"
@@ -149,17 +151,47 @@ local function createActivationUI()
     end)
 
     -- Закрытие по ESC
-    local connection
-    connection = UserInputService.InputBegan:Connect(function(input)
+    local escConnection
+    escConnection = UserInputService.InputBegan:Connect(function(input)
         if input.KeyCode == Enum.KeyCode.Escape then
-            connection:Disconnect()
+            escConnection:Disconnect()
             screenGui:Destroy()
             getgenv().ActivationUI = nil
+            getgenv().AutoFarmData.ActivationUIVisible = false
         end
     end)
 
     getgenv().ActivationUI = screenGui
+    getgenv().AutoFarmData.ActivationUIVisible = true
     return screenGui
+end
+
+-- Функция для показа/скрытия UI активации
+local function toggleActivationUI()
+    if getgenv().AutoFarmData.ActivationUIVisible then
+        -- Закрываем UI
+        if getgenv().ActivationUI then
+            pcall(function()
+                getgenv().ActivationUI:Destroy()
+            end)
+        end
+        getgenv().ActivationUI = nil
+        getgenv().AutoFarmData.ActivationUIVisible = false
+    else
+        -- Открываем UI
+        createActivationUI()
+    end
+end
+
+-- Обработчик нажатия клавиши K для показа/скрытия UI
+local function setupKeybindListener()
+    UserInputService.InputBegan:Connect(function(input, gameProcessed)
+        if gameProcessed then return end
+        
+        if input.KeyCode == Enum.KeyCode.K then
+            toggleActivationUI()
+        end
+    end)
 end
 
 -- Функция проверки активации
@@ -665,6 +697,9 @@ end
 
 -- Запуск с защитой от ошибок
 local function safeInitialize()
+    -- Настраиваем обработчик клавиши K
+    setupKeybindListener()
+    
     local success, err = pcall(initializeAutoFarm)
     if not success then
         warn("Критическая ошибка инициализации:", err)
