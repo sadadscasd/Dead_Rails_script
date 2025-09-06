@@ -29,11 +29,6 @@ local BOND_NAME = "Bond"
 local GUN_NAME = "MaximGun"
 local REMOTES_PATH = {"Remotes", "EndDecision"}
 local ACTIVATE_PATH = {"Shared", "Network", "RemotePromise", "Remotes", "C_ActivateObject"}
-local ERROR_PATTERNS = {
-    "attempt to iterate over a nil value",
-    "WeaponController",
-    "ReplicatedStorage.Client.Game.Controllers"
-}
 
 -- Улучшенная функция для безопасного добавления соединений
 local function manageConnection(connection, key)
@@ -77,46 +72,34 @@ local function safeWait(duration)
     return AUTO_FARM_ENABLED
 end
 
--- Функция для проверки, содержит ли текст ошибку из нашего списка
-local function isTargetError(message)
-    for _, pattern in ipairs(ERROR_PATTERNS) do
-        if string.find(message, pattern) then
-            return true
-        end
-    end
-    return false
-end
-
 -- Перехватчик ошибок
 local function setupErrorHandler()
     local function onErrorMessage(message, traceback, script)
         if not AUTO_FARM_ENABLED then return end
         
-        if isTargetError(message) then
-            local currentTime = tick()
-            local data = getgenv().AutoFarmData
+        local currentTime = tick()
+        local data = getgenv().AutoFarmData
+        
+        if currentTime - data.LastErrorTime > data.ErrorCooldown then
+            data.ErrorCount = 0
+        end
+        
+        data.ErrorCount = data.ErrorCount + 1
+        data.LastErrorTime = currentTime
+        
+        warn("Обнаружена ошибка ("..data.ErrorCount.."/"..data.MaxErrors.."):", message)
+        
+        if data.ErrorCount >= data.MaxErrors then
+            data.ErrorCount = 0
             
-            if currentTime - data.LastErrorTime > data.ErrorCooldown then
-                data.ErrorCount = 0
-            end
-            
-            data.ErrorCount = data.ErrorCount + 1
-            data.LastErrorTime = currentTime
-            
-            warn("Обнаружена целевая ошибка ("..data.ErrorCount.."/"..data.MaxErrors.."):", message)
-            
-            if data.ErrorCount >= data.MaxErrors then
-                data.ErrorCount = 0
-                
-                local player = Players.LocalPlayer
-                if player and player.Character then
-                    local humanoid = player.Character:FindFirstChild("Humanoid")
-                    if humanoid and humanoid.Health > 0 then
-                        warn("Слишком много ошибок! Убиваем персонажа...")
-                        pcall(function()
-                            humanoid:ChangeState(Enum.HumanoidStateType.Dead)
-                        end)
-                    end
+            local player = Players.LocalPlayer
+            if player and player.Character then
+                local humanoid = player.Character:FindFirstChild("Humanoid")
+                if humanoid and humanoid.Health > 0 then
+                    warn("Слишком много ошибок! Убиваем персонажа...")
+                    pcall(function()
+                        humanoid:ChangeState(Enum.HumanoidStateType.Dead)
+                    end)
                 end
             end
         end
