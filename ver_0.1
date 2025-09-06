@@ -41,11 +41,25 @@ local function createActivationIcon()
         end)
     end
 
-    local screenGui = Instance.new("ScreenGui")
-    screenGui.Name = "AutoFarmActivationIcon"
-    screenGui.Parent = CoreGui
-    screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    screenGui.ResetOnSpawn = false
+    -- Проверяем, можем ли мы создавать UI элементы
+    if not RunService:IsRunMode() and not RunService:IsStudio() then
+        warn("Невозможно создать UI в этом контексте")
+        return nil
+    end
+
+    local success, screenGui = pcall(function()
+        local screenGui = Instance.new("ScreenGui")
+        screenGui.Name = "AutoFarmActivationIcon"
+        screenGui.Parent = CoreGui
+        screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+        screenGui.ResetOnSpawn = false
+        return screenGui
+    end)
+    
+    if not success then
+        warn("Ошибка создания ScreenGui:", screenGui)
+        return nil
+    end
 
     local iconButton = Instance.new("ImageButton")
     iconButton.Size = UDim2.new(0, 50, 0, 50)
@@ -105,11 +119,25 @@ local function createActivationUI()
         end)
     end
 
-    local screenGui = Instance.new("ScreenGui")
-    screenGui.Name = "AutoFarmActivation"
-    screenGui.Parent = CoreGui
-    screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    screenGui.ResetOnSpawn = false
+    -- Проверяем контекст
+    if not RunService:IsRunMode() and not RunService:IsStudio() then
+        warn("Невозможно создать UI в этом контексте")
+        return nil
+    end
+
+    local success, screenGui = pcall(function()
+        local screenGui = Instance.new("ScreenGui")
+        screenGui.Name = "AutoFarmActivation"
+        screenGui.Parent = CoreGui
+        screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+        screenGui.ResetOnSpawn = false
+        return screenGui
+    end)
+    
+    if not success then
+        warn("Ошибка создания ScreenGui:", screenGui)
+        return nil
+    end
 
     local mainFrame = Instance.new("Frame")
     mainFrame.Size = UDim2.new(0, 350, 0, 200)
@@ -255,8 +283,14 @@ local function checkActivation()
         return true
     end
     
-    -- Создаем иконку для открытия UI
-    createActivationIcon()
+    -- Проверяем, можем ли мы создавать UI
+    if RunService:IsRunMode() or RunService:IsStudio() then
+        -- Создаем иконку для открытия UI
+        createActivationIcon()
+    else
+        warn("UI активации недоступно в этом контексте")
+        return false
+    end
     
     -- Ждем активации
     local startTime = tick()
