@@ -30,8 +30,73 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local CoreGui = game:GetService("CoreGui")
 local UserInputService = game:GetService("UserInputService")
+local HttpService = game:GetService("HttpService")
 
 -- UI функции
+local function createActivationIcon()
+    -- Очищаем старый иконку если есть
+    if getgenv().ActivationIcon then
+        pcall(function()
+            getgenv().ActivationIcon:Destroy()
+        end)
+    end
+
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "AutoFarmActivationIcon"
+    screenGui.Parent = CoreGui
+    screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    screenGui.ResetOnSpawn = false
+
+    local iconButton = Instance.new("ImageButton")
+    iconButton.Size = UDim2.new(0, 50, 0, 50)
+    iconButton.Position = UDim2.new(0, 20, 0.5, -25)
+    iconButton.AnchorPoint = Vector2.new(0, 0.5)
+    iconButton.BackgroundColor3 = Color3.fromRGB(0, 120, 255)
+    iconButton.AutoButtonColor = false
+    
+    -- Создаем круглую форму
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(1, 0)
+    corner.Parent = iconButton
+    
+    -- Добавляем иконку замка (можно заменить на любую другую)
+    local lockIcon = Instance.new("ImageLabel")
+    lockIcon.Size = UDim2.new(0, 30, 0, 30)
+    lockIcon.Position = UDim2.new(0.5, -15, 0.5, -15)
+    lockIcon.BackgroundTransparency = 1
+    lockIcon.Image = "rbxassetid://10723391858" -- Иконка замка
+    lockIcon.Parent = iconButton
+    
+    -- Эффект при наведении
+    local hoverTween
+    iconButton.MouseEnter:Connect(function()
+        if hoverTween then hoverTween:Cancel() end
+        hoverTween = TweenService:Create(iconButton, TweenInfo.new(0.2), {
+            Size = UDim2.new(0, 55, 0, 55),
+            BackgroundColor3 = Color3.fromRGB(0, 150, 255)
+        })
+        hoverTween:Play()
+    end)
+    
+    iconButton.MouseLeave:Connect(function()
+        if hoverTween then hoverTween:Cancel() end
+        hoverTween = TweenService:Create(iconButton, TweenInfo.new(0.2), {
+            Size = UDim2.new(0, 50, 0, 50),
+            BackgroundColor3 = Color3.fromRGB(0, 120, 255)
+        })
+        hoverTween:Play()
+    end)
+    
+    -- Обработчик клика
+    iconButton.MouseButton1Click:Connect(function()
+        createActivationUI()
+    end)
+    
+    iconButton.Parent = screenGui
+    getgenv().ActivationIcon = screenGui
+    return screenGui
+end
+
 local function createActivationUI()
     -- Очищаем старый UI если есть
     if getgenv().ActivationUI then
@@ -141,6 +206,14 @@ local function createActivationUI()
             tween.Completed:Connect(function()
                 screenGui:Destroy()
                 getgenv().ActivationUI = nil
+                
+                -- Убираем иконку активации после успешной активации
+                if getgenv().ActivationIcon then
+                    pcall(function()
+                        getgenv().ActivationIcon:Destroy()
+                        getgenv().ActivationIcon = nil
+                    end)
+                end
             end)
         else
             statusLabel.Text = "❌ Неверный ключ активации!"
@@ -153,8 +226,17 @@ local function createActivationUI()
     connection = UserInputService.InputBegan:Connect(function(input)
         if input.KeyCode == Enum.KeyCode.Escape then
             connection:Disconnect()
-            screenGui:Destroy()
-            getgenv().ActivationUI = nil
+            
+            -- Плавное скрытие окна
+            local tween = TweenService:Create(mainFrame, TweenInfo.new(0.3, Enum.EasingStyle.Quad), {
+                Position = UDim2.new(0.5, -175, -0.5, -100)
+            })
+            tween:Play()
+            
+            tween.Completed:Connect(function()
+                screenGui:Destroy()
+                getgenv().ActivationUI = nil
+            end)
         end
     end)
 
@@ -173,12 +255,23 @@ local function checkActivation()
         return true
     end
     
-    createActivationUI()
+    -- Создаем иконку для открытия UI
+    createActivationIcon()
     
     -- Ждем активации
     local startTime = tick()
     while tick() - startTime < 300 and not getgenv().AutoFarmData.Activated do -- 5 минут таймаут
         task.wait(1)
+    end
+    
+    -- Если время вышло и активация не пройдена, убираем иконку
+    if not getgenv().AutoFarmData.Activated then
+        if getgenv().ActivationIcon then
+            pcall(function()
+                getgenv().ActivationIcon:Destroy()
+                getgenv().ActivationIcon = nil
+            end)
+        end
     end
     
     return getgenv().AutoFarmData.Activated
