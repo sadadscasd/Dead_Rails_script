@@ -1,20 +1,6 @@
 local AUTO_FARM_ENABLED = true
 local CHECK_INTERVAL = 2
 
--- Конфигурация активации
-local ACTIVATION_KEY = "DEADRAILS123" -- Ваш ключ активации
-local ACTIVATION_REQUIRED = true -- Требовать активацию
-
--- GitHub API конфигурация
-local GITHUB_TOKEN = os.getenv("TOKEN_GIT") or "" -- Токен из Environment secrets
-local REPO_OWNER = "sadadscasd"
-local REPO_NAME = "Dead_Rails_script"
-local FILE_PATH = "activated_users.json"
-local API_URL = "https://api.github.com/repos/"..REPO_OWNER.."/"..REPO_NAME.."/contents/"..FILE_PATH
-
--- URL для получения списка активированных пользователей
-local ACTIVATED_USERS_URL = "https://raw.githubusercontent.com/sadadscasd/Dead_Rails_script/main/activated_users.json"
-
 -- Инициализация глобальных переменных
 if not getgenv().AutoFarmData then
     getgenv().AutoFarmData = {
@@ -27,10 +13,7 @@ if not getgenv().AutoFarmData then
         MaxErrors = 3,
         ErrorCooldown = 5,
         GunSearchTimeout = 20,
-        SafetyChecks = true,
-        Activated = false, -- Флаг активации
-        ActivationUIVisible = false, -- Флаг видимости UI
-        ActivatedUsers = {} -- Таблица активированных пользователей
+        SafetyChecks = true -- Добавляем флаг безопасности
     }
 end
 
@@ -40,414 +23,17 @@ local Workspace = game:GetService("Workspace")
 local TweenService = game:GetService("TweenService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
-local CoreGui = game:GetService("CoreGui")
-local UserInputService = game:GetService("UserInputService")
-local HttpService = game:GetService("HttpService")
 
--- Функция для проверки доступности GitHub токена
-local function isGitHubTokenAvailable()
-    return GITHUB_TOKEN and GITHUB_TOKEN ~= "" and GITHUB_TOKEN ~= "ваш_github_token_здесь"
-end
-
--- Функция для загрузки списка активированных пользователей
-local function loadActivatedUsers()
-    local success, result = pcall(function()
-        local response = syn and syn.request or request
-        if not response then
-            warn("HTTP запросы не поддерживаются")
-            return {}
-        end
-        
-        local httpResponse = response({
-            Url = ACTIVATED_USERS_URL,
-            Method = "GET"
-        })
-        
-        if httpResponse.Success and httpResponse.StatusCode == 200 then
-            return HttpService:JSONDecode(httpResponse.Body)
-        else
-            warn("Не удалось загрузить список пользователей: " .. tostring(httpResponse.StatusCode))
-            return {}
-        end
-    end)
-    
-    if not success then
-        warn("Ошибка при загрузке списка пользователей: " .. tostring(result))
-        return {}
-    end
-    
-    return result or {}
-end
-
--- Функция для добавления пользователя в GitHub файл
-local function addUserToGitHub(userId, key)
-    if not isGitHubTokenAvailable() then
-        return false, "GitHub токен не доступен"
-    end
-    
-    local success, result = pcall(function()
-        local response = syn and syn.request or request
-        if not response then
-            return false, "HTTP запросы не поддерживаются"
-        end
-        
-        -- Сначала получаем текущее содержимое файла и его SHA
-        local getResponse = response({
-            Url = API_URL,
-            Method = "GET",
-            Headers = {
-                ["Authorization"] = "token " .. GITHUB_TOKEN,
-                ["User-Agent"] = "Roblox-AutoFarm",
-                ["Accept"] = "application/vnd.github.v3+json"
-            }
-        })
-        
-        if not getResponse.Success then
-            return false, "Ошибка получения файла: " .. tostring(getResponse.StatusCode)
-        end
-        
-        local fileData = HttpService:JSONDecode(getResponse.Body)
-        local currentContent = ""
-        local fileSha = fileData.sha
-        
-        if getResponse.StatusCode == 200 then
-            -- Декодируем текущее содержимое
-            currentContent = HttpService:Base64Decode(fileData.content)
-        elseif getResponse.StatusCode ~= 404 then
-            return false, "Неожиданный статус: " .. tostring(getResponse.StatusCode)
-        end
-        
-        -- Парсим текущих пользователей или создаем новый список
-        local activatedUsers = {}
-        if currentContent ~= "" then
-            local parseSuccess, parsedData = pcall(function()
-                return HttpService:JSONDecode(currentContent)
-            end)
-            if parseSuccess then
-                activatedUsers = parsedData
-            end
-        end
-        
-        -- Проверяем, существует ли пользователь
-        local userExists = false
-        for i, userData in ipairs(activatedUsers) do
-            if tonumber(userData.userId) == userId then
-                -- Обновляем существующего пользователя
-                userData.key = key
-                userData.activatedAt = os.date("%Y-%m-%d %H:%M:%S")
-                userData.lastUpdated = os.date("%Y-%m-%d %H:%M:%S")
-                userExists = true
-                break
-            end
-        end
-        
-        if not userExists then
-            -- Добавляем нового пользователя
-            table.insert(activatedUsers, {
-                userId = userId,
-                key = key,
-                activatedAt = os.date("%Y-%m-%d %H:%M:%S"),
-                lastUpdated = os.date("%Y-%m-%d %H:%M:%S"),
-                activatedBy = "auto_farm_script"
-            })
-        end
-        
-        -- Подготавливаем данные для отправки
-        local newContent = HttpService:JSONEncode(activatedUsers)
-        local encodedContent = HttpService:Base64Encode(newContent)
-        
-        -- Отправляем обновление на GitHub
-        local putResponse = response({
-            Url = API_URL,
-            Method = "PUT",
-            Headers = {
-                ["Authorization"] = "token " .. GITHUB_TOKEN,
-                ["User-Agent"] = "Roblox-AutoFarm",
-                ["Content-Type"] = "application/json",
-                ["Accept"] = "application/vnd.github.v3+json"
-            },
-            Body = HttpService:JSONEncode({
-                message = "Add/update activated user: " .. tostring(userId),
-                content = encodedContent,
-                sha = fileSha
-            })
-        })
-        
-        if putResponse.Success and putResponse.StatusCode == 200 then
-            return true, "Пользователь успешно добавлен в GitHub"
-        else
-            return false, "Ошибка обновления: " .. tostring(putResponse.StatusCode) .. " - " .. tostring(putResponse.Body)
-        end
-    end)
-    
-    if not success then
-        return false, "Ошибка выполнения: " .. tostring(result)
-    end
-    
-    return result
-end
-
--- Функция для проверки активации по ID пользователя
-local function checkUserActivation(userId)
-    local activatedUsers = getgenv().AutoFarmData.ActivatedUsers
-    
-    -- Проверяем локальное хранилище сначала
-    if activatedUsers[userId] then
-        return activatedUsers[userId] == ACTIVATION_KEY
-    end
-    
-    -- Если не найдено локально, загружаем с GitHub
-    local remoteUsers = loadActivatedUsers()
-    for _, userData in pairs(remoteUsers) do
-        if tonumber(userData.userId) == userId and userData.key == ACTIVATION_KEY then
-            -- Сохраняем в локальное хранилище для будущих проверок
-            activatedUsers[userId] = ACTIVATION_KEY
-            return true
-        end
-    end
-    
-    return false
-end
-
--- Функция для добавления пользователя в список активированных
-local function addUserToActivatedList(userId, key)
-    if not syn or not (syn.request or request) then
-        warn("Не удается добавить пользователя: HTTP запросы не поддерживаются")
-        return false
-    end
-    
-    -- Пытаемся добавить пользователя на GitHub если токен доступен
-    local githubSuccess = true
-    local githubMessage = "GitHub токен не настроен, используется локальное хранилище"
-    
-    if isGitHubTokenAvailable() then
-        githubSuccess, githubMessage = addUserToGitHub(userId, key)
-    end
-    
-    -- Всегда сохраняем в локальное хранилище
-    getgenv().AutoFarmData.ActivatedUsers[userId] = key
-    
-    if githubSuccess then
-        warn("✅ " .. githubMessage)
-        return true
-    else
-        warn("⚠️ " .. githubMessage .. " (локальное хранилище)")
-        return true -- Все равно возвращаем true, так как локальное сохранение прошло успешно
-    end
-end
-
--- UI функции
-local function createActivationUI()
-    -- Очищаем старый UI если есть
-    if getgenv().ActivationUI then
-        pcall(function()
-            getgenv().ActivationUI:Destroy()
-        end)
-    end
-
-    local screenGui = Instance.new("ScreenGui")
-    screenGui.Name = "AutoFarmActivation"
-    screenGui.Parent = CoreGui
-    screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    screenGui.ResetOnSpawn = false
-
-    local mainFrame = Instance.new("Frame")
-    mainFrame.Size = UDim2.new(0, 350, 0, 200)
-    mainFrame.Position = UDim2.new(0.5, -175, 0.5, -100)
-    mainFrame.AnchorPoint = Vector2.new(0.5, 0.5)
-    mainFrame.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
-    mainFrame.BorderSizePixel = 0
-    mainFrame.Parent = screenGui
-
-    local corner = Instance.new("UICorner")
-    corner.CornerRadius = UDim.new(0, 8)
-    corner.Parent = mainFrame
-
-    local title = Instance.new("TextLabel")
-    title.Size = UDim2.new(1, 0, 0, 40)
-    title.Position = UDim2.new(0, 0, 0, 0)
-    title.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-    title.Text = "Активация AutoFarm"
-    title.TextColor3 = Color3.fromRGB(255, 255, 255)
-    title.Font = Enum.Font.GothamBold
-    title.TextSize = 16
-    title.Parent = mainFrame
-
-    local titleCorner = Instance.new("UICorner")
-    titleCorner.CornerRadius = UDim.new(0, 8)
-    titleCorner.Parent = title
-
-    local inputFrame = Instance.new("Frame")
-    inputFrame.Size = UDim2.new(0.8, 0, 0, 40)
-    inputFrame.Position = UDim2.new(0.1, 0, 0.3, 0)
-    inputFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
-    inputFrame.BorderSizePixel = 0
-    inputFrame.Parent = mainFrame
-
-    local inputCorner = Instance.new("UICorner")
-    inputCorner.CornerRadius = UDim.new(0, 6)
-    inputCorner.Parent = inputFrame
-
-    local textBox = Instance.new("TextBox")
-    textBox.Size = UDim2.new(1, -20, 1, 0)
-    textBox.Position = UDim2.new(0, 10, 0, 0)
-    textBox.BackgroundTransparency = 1
-    textBox.Text = ""
-    textBox.PlaceholderText = "Введите ключ активации..."
-    textBox.TextColor3 = Color3.fromRGB(255, 255, 255)
-    textBox.Font = Enum.Font.Gotham
-    textBox.TextSize = 14
-    textBox.ClearTextOnFocus = false
-    textBox.Parent = inputFrame
-
-    local statusLabel = Instance.new("TextLabel")
-    statusLabel.Size = UDim2.new(1, 0, 0, 20)
-    statusLabel.Position = UDim2.new(0, 0, 0.6, 0)
-    statusLabel.BackgroundTransparency = 1
-    statusLabel.Text = ""
-    statusLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
-    statusLabel.Font = Enum.Font.Gotham
-    statusLabel.TextSize = 12
-    statusLabel.Parent = mainFrame
-
-    local activateButton = Instance.new("TextButton")
-    activateButton.Size = UDim2.new(0.4, 0, 0, 35)
-    activateButton.Position = UDim2.new(0.3, 0, 0.75, 0)
-    activateButton.BackgroundColor3 = Color3.fromRGB(0, 120, 255)
-    activateButton.Text = "Активировать"
-    activateButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-    activateButton.Font = Enum.Font.GothamBold
-    activateButton.TextSize = 14
-    activateButton.Parent = mainFrame
-
-    local buttonCorner = Instance.new("UICorner")
-    buttonCorner.CornerRadius = UDim.new(0, 6)
-    buttonCorner.Parent = activateButton
-
-    -- Информация о GitHub статусе
-    local githubStatus = Instance.new("TextLabel")
-    githubStatus.Size = UDim2.new(1, 0, 0, 15)
-    githubStatus.Position = UDim2.new(0, 0, 0.85, 0)
-    githubStatus.BackgroundTransparency = 1
-    githubStatus.Text = isGitHubTokenAvailable() and "GitHub: ✅ Подключен" or "GitHub: ⚠️ Локальный режим"
-    githubStatus.TextColor3 = isGitHubTokenAvailable() and Color3.fromRGB(100, 255, 100) or Color3.fromRGB(255, 165, 0)
-    githubStatus.Font = Enum.Font.Gotham
-    githubStatus.TextSize = 10
-    githubStatus.Parent = mainFrame
-
-    -- Обработчик активации
-    activateButton.MouseButton1Click:Connect(function()
-        local key = textBox.Text:gsub("%s+", "") -- Убираем пробелы
-        if key == ACTIVATION_KEY then
-            local player = Players.LocalPlayer
-            if player then
-                -- Добавляем пользователя в список активированных
-                local success = addUserToActivatedList(player.UserId, key)
-                if success then
-                    getgenv().AutoFarmData.Activated = true
-                    statusLabel.Text = "✅ Активация успешна!"
-                    statusLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
-                    
-                    -- Плавное исчезновение UI
-                    local tween = TweenService:Create(mainFrame, TweenInfo.new(0.5, Enum.EasingStyle.Quad), {
-                        Position = UDim2.new(0.5, -175, -0.5, -100)
-                    })
-                    tween:Play()
-                    
-                    tween.Completed:Connect(function()
-                        screenGui:Destroy()
-                        getgenv().ActivationUI = nil
-                        getgenv().AutoFarmData.ActivationUIVisible = false
-                    end)
-                else
-                    statusLabel.Text = "❌ Ошибка активации!"
-                    statusLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
-                end
-            end
-        else
-            statusLabel.Text = "❌ Неверный ключ активации!"
-            statusLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
-        end
-    end)
-
-    -- Закрытие по ESC
-    local escConnection
-    escConnection = UserInputService.InputBegan:Connect(function(input)
-        if input.KeyCode == Enum.KeyCode.Escape then
-            escConnection:Disconnect()
-            screenGui:Destroy()
-            getgenv().ActivationUI = nil
-            getgenv().AutoFarmData.ActivationUIVisible = false
-        end
-    end)
-
-    getgenv().ActivationUI = screenGui
-    getgenv().AutoFarmData.ActivationUIVisible = true
-    return screenGui
-end
-
--- Функция для показа/скрытия UI активации
-local function toggleActivationUI()
-    if getgenv().AutoFarmData.ActivationUIVisible then
-        -- Закрываем UI
-        if getgenv().ActivationUI then
-            pcall(function()
-                getgenv().ActivationUI:Destroy()
-            end)
-        end
-        getgenv().ActivationUI = nil
-        getgenv().AutoFarmData.ActivationUIVisible = false
-    else
-        -- Открываем UI
-        createActivationUI()
-    end
-end
-
--- Обработчик нажатия клавиши K для показа/скрытия UI
-local function setupKeybindListener()
-    UserInputService.InputBegan:Connect(function(input, gameProcessed)
-        if gameProcessed then return end
-        
-        if input.KeyCode == Enum.KeyCode.K then
-            toggleActivationUI()
-        end
-    end)
-end
-
--- Функция проверки активации
-local function checkActivation()
-    if not ACTIVATION_REQUIRED then
-        getgenv().AutoFarmData.Activated = true
-        return true
-    end
-    
-    if getgenv().AutoFarmData.Activated then
-        return true
-    end
-    
-    local player = Players.LocalPlayer
-    if not player then
-        warn("Игрок не найден")
-        return false
-    end
-    
-    -- Проверяем активацию по ID пользователя
-    if checkUserActivation(player.UserId) then
-        getgenv().AutoFarmData.Activated = true
-        return true
-    end
-    
-    -- Если активация не найдена, показываем UI
-    createActivationUI()
-    
-    -- Ждем активации
-    local startTime = tick()
-    while tick() - startTime < 300 and not getgenv().AutoFarmData.Activated do -- 5 минут таймаут
-        task.wait(1)
-    end
-    
-    return getgenv().AutoFarmData.Activated
-end
+-- Константы
+local BOND_NAME = "Bond"
+local GUN_NAME = "MaximGun"
+local REMOTES_PATH = {"Remotes", "EndDecision"}
+local ACTIVATE_PATH = {"Shared", "Network", "RemotePromise", "Remotes", "C_ActivateObject"}
+local ERROR_PATTERNS = {
+    "attempt to iterate over a nil value",
+    "WeaponController",
+    "ReplicatedStorage.Client.Game.Controllers"
+}
 
 -- Улучшенная функция для безопасного добавления соединений
 local function manageConnection(connection, key)
@@ -490,17 +76,6 @@ local function safeWait(duration)
     end
     return AUTO_FARM_ENABLED
 end
-
--- Константы
-local BOND_NAME = "Bond"
-local GUN_NAME = "MaximGun"
-local REMOTES_PATH = {"Remotes", "EndDecision"}
-local ACTIVATE_PATH = {"Shared", "Network", "RemotePromise", "Remotes", "C_ActivateObject"}
-local ERROR_PATTERNS = {
-    "attempt to iterate over a nil value",
-    "WeaponController",
-    "ReplicatedStorage.Client.Game.Controllers"
-}
 
 -- Функция для проверки, содержит ли текст ошибку из нашего списка
 local function isTargetError(message)
@@ -550,7 +125,7 @@ local function setupErrorHandler()
     manageConnection(game:GetService("ScriptContext").Error:Connect(onErrorMessage), "error_handler")
 end
 
--- Оптимизированная функции поиска в иерархии
+-- Оптимизированная функция поиска в иерархии
 local function findInHierarchy(parent, path)
     if not parent then return nil end
     local current = parent
@@ -578,12 +153,6 @@ local function isValidPart(part)
 end
 
 local function initializeAutoFarm()
-    -- Проверяем активацию перед запуском
-    if not checkActivation() then
-        warn("Активация не пройдена. Скрипт отключен.")
-        return
-    end
-    
     if getgenv().AutoFarmData.Initialized then return end
     getgenv().AutoFarmData.Initialized = true
     
@@ -930,16 +499,6 @@ end
 
 -- Запуск с защитой от ошибок
 local function safeInitialize()
-    -- Настраиваем обработчик клавиши K
-    setupKeybindListener()
-    
-    -- Проверяем доступность GitHub токена
-    if isGitHubTokenAvailable() then
-        warn("GitHub токен обнаружен, используется облачное хранилище")
-    else
-        warn("GitHub токен не обнаружен, используется локальное хранилище")
-    end
-    
     local success, err = pcall(initializeAutoFarm)
     if not success then
         warn("Критическая ошибка инициализации:", err)
