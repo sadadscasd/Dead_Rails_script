@@ -1,5 +1,6 @@
 local AUTO_FARM_ENABLED = true
 local CHECK_INTERVAL = 2
+local MAX_FARM_TIME = 120 -- 2 минуты в секундах
 
 -- Инициализация глобальных переменных
 if not getgenv().AutoFarmData then
@@ -13,7 +14,9 @@ if not getgenv().AutoFarmData then
         MaxErrors = 10,
         ErrorCooldown = 5,
         GunSearchTimeout = 20,
-        SafetyChecks = true -- Добавляем флаг безопасности
+        SafetyChecks = true, -- Добавляем флаг безопасности
+        FarmStartTime = 0,   -- Время начала фарма
+        FarmTimerActive = false -- Флаг активного таймера
     }
 end
 
@@ -150,6 +153,52 @@ end
 -- Безопасная проверка объекта
 local function isValidPart(part)
     return part and part.Parent and part:IsA("BasePart")
+end
+
+-- Функция для проверки времени фарма и убийства персонажа при необходимости
+local function checkFarmTime(character)
+    if not character then return end
+    
+    local humanoid = character:FindFirstChild("Humanoid")
+    if not humanoid or humanoid.Health <= 0 then return end
+    
+    local currentTime = tick()
+    local elapsedTime = currentTime - getgenv().AutoFarmData.FarmStartTime
+    
+    if elapsedTime >= MAX_FARM_TIME then
+        warn("Время фарма истекло ("..math.floor(elapsedTime).." сек). Убиваем персонажа...")
+        pcall(function()
+            humanoid:ChangeState(Enum.HumanoidStateType.Dead)
+        end)
+        getgenv().AutoFarmData.FarmTimerActive = false
+        return true
+    end
+    
+    -- Предупреждение за 10 секунд до конца
+    if elapsedTime >= MAX_FARM_TIME - 10 and not getgenv().AutoFarmData.WarningShown then
+        warn("До окончания фарма осталось 10 секунд")
+        getgenv().AutoFarmData.WarningShown = true
+    end
+    
+    return false
+end
+
+-- Функция для запуска таймера фарма
+local function startFarmTimer()
+    getgenv().AutoFarmData.FarmStartTime = tick()
+    getgenv().AutoFarmData.FarmTimerActive = true
+    getgenv().AutoFarmData.WarningShown = false
+    warn("Таймер фарма запущен (максимум "..MAX_FARM_TIME.." секунд)")
+end
+
+-- Функция для остановки таймера фарма
+local function stopFarmTimer()
+    if getgenv().AutoFarmData.FarmTimerActive then
+        local elapsedTime = tick() - getgenv().AutoFarmData.FarmStartTime
+        warn("Таймер фарма остановлен. Прошло времени: "..math.floor(elapsedTime).." секунд")
+        getgenv().AutoFarmData.FarmTimerActive = false
+        getgenv().AutoFarmData.WarningShown = false
+    end
 end
 
 local function initializeAutoFarm()
@@ -417,13 +466,22 @@ local function initializeAutoFarm()
                         return
                     end
                     
+                    -- Запускаем таймер фарма
+                    startFarmTimer()
+                    
                     local currentIndex = 1
                     local started = false
 
                     while humanoid.Health > 0 and AUTO_FARM_ENABLED and getgenv().AutoFarmData.IsInGame do
+                        -- Проверяем время фарма
+                        if checkFarmTime(character) then
+                            break
+                        end
+                        
                         if not started then
                             local setupSuccess = setupGun(root, humanoid)
                             if not setupSuccess then
+                                stopFarmTimer()
                                 break
                             end
                             started = true
@@ -440,11 +498,15 @@ local function initializeAutoFarm()
                                         humanoid:ChangeState(Enum.HumanoidStateType.Dead)
                                     end
                                 end)
+                                stopFarmTimer()
                                 break
                             end
                         end
                         safeWait(0.3)
                     end
+                    
+                    -- Останавливаем таймер, если персонаж умер
+                    stopFarmTimer()
                 end
 
                 -- Безопасный обработчик добавления персонажа
@@ -476,6 +538,7 @@ local function initializeAutoFarm()
                 manageConnection(Players.LocalPlayer:GetPropertyChangedSignal("UserId"):Connect(function()
                     if game.PlaceId ~= getgenv().AutoFarmData.GamePlaceId then
                         getgenv().AutoFarmData.IsInGame = false
+                        stopFarmTimer()
                     end
                 end), "userid_changed")
 
@@ -492,6 +555,7 @@ local function initializeAutoFarm()
         else
             warn("Ожидание перехода в игру... Текущее место:", game.PlaceId)
             getgenv().AutoFarmData.IsInGame = false
+            stopFarmTimer()
             safeWait(CHECK_INTERVAL)
         end
     end
