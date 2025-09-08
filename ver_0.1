@@ -2,47 +2,6 @@ local AUTO_FARM_ENABLED = true
 local CHECK_INTERVAL = 2
 local MAX_FARM_TIME = 120
 
---// Освобождение курсора и сброс позиции мыши
-local Players = game:GetService("Players")
-local UserInputService = game:GetService("UserInputService")
-local RunService = game:GetService("RunService")
-
-local player = Players.LocalPlayer
-local mouse = player:GetMouse()
-
--- Функция для разблокировки курсора
-local function unlockCursor()
-    if not UserInputService.MouseBehavior ~= Enum.MouseBehavior.Default then
-        UserInputService.MouseBehavior = Enum.MouseBehavior.Default
-    end
-end
-
--- Функция для сброса позиции курсора (имитация движения)
-local function resetCursorPosition()
-    -- Пытаемся сбросить через изменение поведения (может помочь на некоторых играх)
-    UserInputService.MouseBehavior = Enum.MouseBehavior.LockCenter
-    task.wait()
-    UserInputService.MouseBehavior = Enum.MouseBehavior.Default
-
-    -- Альтернативный метод: попытка переместить курсор через Input (если доступно)
-    pcall(function()
-        local screenSize = workspace.CurrentCamera.ViewportSize
-        UserInputService:SetMouseLocation(screenSize.X / 2, screenSize.Y / 2)
-    end)
-end
-
--- Запускаем сразу
-unlockCursor()
-resetCursorPosition()
-
--- Постоянный мониторинг и исправление
-while task.wait(1) do
-    if UserInputService.MouseBehavior == Enum.MouseBehavior.LockCenter then
-        unlockCursor()
-        resetCursorPosition()
-    end
-end
-
 -- Инициализация глобальных переменных
 if not getgenv().AutoFarmCore then
     getgenv().AutoFarmCore = {
@@ -71,8 +30,7 @@ if not getgenv().AutoFarmCore then
         },
         Connections = {},
         Cache = {
-            Services = {},
-            Remotes = {}
+            Services = {}
         },
         Constants = {
             BondName = "Bond",
@@ -103,6 +61,7 @@ cache.Services.TweenService = game:GetService("TweenService")
 cache.Services.ReplicatedStorage = game:GetService("ReplicatedStorage")
 cache.Services.RunService = game:GetService("RunService")
 cache.Services.ScriptContext = game:GetService("ScriptContext")
+cache.Services.UserInputService = game:GetService("UserInputService") -- Добавлен новый сервис
 
 local Players = cache.Services.Players
 local Workspace = cache.Services.Workspace
@@ -110,6 +69,22 @@ local TweenService = cache.Services.TweenService
 local ReplicatedStorage = cache.Services.ReplicatedStorage
 local RunService = cache.Services.RunService
 local ScriptContext = cache.Services.ScriptContext
+local UserInputService = cache.Services.UserInputService -- Новая переменная
+
+-- Функция разблокировки курсора
+local function unlockCursor()
+    pcall(function()
+        if UserInputService.MouseBehavior ~= Enum.MouseBehavior.Default then
+            UserInputService.MouseBehavior = Enum.MouseBehavior.Default
+        end
+        if UserInputService.MouseIconEnabled == false then
+            UserInputService.MouseIconEnabled = true
+        end
+    end)
+end
+
+-- Запускаем разблокировку сразу
+unlockCursor()
 
 -- Логирование с меткой времени
 local function log(message, level)
@@ -302,6 +277,20 @@ local function initializeAutoFarm()
     state.Initialized = true
     
     setupErrorHandler()
+    
+    -- Запускаем отдельный поток для разблокировки курсора
+    task.spawn(function()
+        while settings.AutoFarmEnabled do
+            unlockCursor()
+            task.wait(2) -- Проверяем каждые 2 секунды
+        end
+    end)
+    
+    -- Слушаем добавление персонажа для разблокировки курсора
+    manageConnection(Players.LocalPlayer.CharacterAdded:Connect(function(character)
+        task.wait(1) -- Небольшая задержка после респавна
+        unlockCursor()
+    end), "character_added_cursor")
     
     while settings.AutoFarmEnabled do
         if not state.GamePlaceId then
