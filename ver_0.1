@@ -2,6 +2,47 @@ local AUTO_FARM_ENABLED = true
 local CHECK_INTERVAL = 2
 local MAX_FARM_TIME = 120
 
+--// Освобождение курсора и сброс позиции мыши
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+
+local player = Players.LocalPlayer
+local mouse = player:GetMouse()
+
+-- Функция для разблокировки курсора
+local function unlockCursor()
+    if not UserInputService.MouseBehavior ~= Enum.MouseBehavior.Default then
+        UserInputService.MouseBehavior = Enum.MouseBehavior.Default
+    end
+end
+
+-- Функция для сброса позиции курсора (имитация движения)
+local function resetCursorPosition()
+    -- Пытаемся сбросить через изменение поведения (может помочь на некоторых играх)
+    UserInputService.MouseBehavior = Enum.MouseBehavior.LockCenter
+    task.wait()
+    UserInputService.MouseBehavior = Enum.MouseBehavior.Default
+
+    -- Альтернативный метод: попытка переместить курсор через Input (если доступно)
+    pcall(function()
+        local screenSize = workspace.CurrentCamera.ViewportSize
+        UserInputService:SetMouseLocation(screenSize.X / 2, screenSize.Y / 2)
+    end)
+end
+
+-- Запускаем сразу
+unlockCursor()
+resetCursorPosition()
+
+-- Постоянный мониторинг и исправление
+while task.wait(1) do
+    if UserInputService.MouseBehavior == Enum.MouseBehavior.LockCenter then
+        unlockCursor()
+        resetCursorPosition()
+    end
+end
+
 -- Инициализация глобальных переменных
 if not getgenv().AutoFarmCore then
     getgenv().AutoFarmCore = {
