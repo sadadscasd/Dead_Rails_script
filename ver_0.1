@@ -10,12 +10,13 @@ if not getgenv().AutoFarmCore then
             MaxFarmTime = MAX_FARM_TIME,
             TweenSpeed = 1000,
             CollectDelay = 0.01,
-            GunSearchTimeout = 20,
+            GunSearchTimeout = 15, -- Уменьшил таймаут
             MaxErrors = 10,
             ErrorCooldown = 5,
             SafetyChecks = true,
             AutoRespawn = true,
-            PriorityTargeting = true
+            PriorityTargeting = true,
+            OperationTimeout = 10 -- Новое: таймаут на операции
         },
         State = {
             Initialized = false,
@@ -29,7 +30,9 @@ if not getgenv().AutoFarmCore then
             RetryCount = 0,
             MaxRetries = 5,
             BondsCollected = 0,
-            TotalRuntime = 0
+            TotalRuntime = 0,
+            StuckCount = 0, -- Новое: счетчик застреваний
+            MaxStuckCount = 3 -- Новое: макс застреваний перед респавном
         },
         Connections = {},
         Cache = {
@@ -160,6 +163,54 @@ local function safeWait(duration)
         task.wait(0.1)
     end
     return settings.AutoFarmEnabled
+end
+
+-- НОВОЕ: Функция проверки застревания
+local function checkIfStuck(operationName, startTime)
+    local currentTime = tick()
+    if currentTime - startTime > settings.OperationTimeout then
+        log(string.format("Застревание в операции: %s (%.1f сек)", operationName, currentTime - startTime), "WARN")
+        state.StuckCount = state.StuckCount + 1
+        return true
+    end
+    return false
+end
+
+-- НОВОЕ: Принудительное освобождение персонажа
+local function forceReleaseCharacter(character)
+    if not character then return false end
+    
+    local humanoid = character:FindFirstChild("Humanoid")
+    local root = character:FindFirstChild("HumanoidRootPart")
+    
+    if humanoid and humanoid.Health > 0 then
+        -- Пытаемся выйти из транспорта
+        pcall(function()
+            humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+            task.wait(0.2)
+            humanoid:ChangeState(Enum.HumanoidStateType.Running)
+        end)
+        
+        -- Сбрасываем анкор
+        if root then
+            pcall(function()
+                root.Anchored = false
+            end)
+        end
+        
+        -- Принудительно убиваем если много застреваний
+        if state.StuckCount >= state.MaxStuckCount then
+            log("Слишком много застреваний! Принудительный респавн...", "WARN")
+            pcall(function()
+                humanoid:ChangeState(Enum.HumanoidStateType.Dead)
+            end)
+            state.StuckCount = 0
+            return true
+        end
+        
+        return true
+    end
+    return false
 end
 
 local function findInHierarchy(parent, path)
@@ -304,7 +355,7 @@ local function createControlPanel()
     local statsLabel = Instance.new("TextLabel")
     statsLabel.Size = UDim2.new(1, -20, 0, 60)
     statsLabel.Position = UDim2.new(0, 10, 0, 80)
-    statsLabel.Text = "Бондов собрано: 0\nВремя работы: 0 сек"
+    statsLabel.Text = "Бондов собрано: 0\nВремя работы: 0 сек\nЗастреваний: 0"
     statsLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
     statsLabel.BackgroundTransparency = 1
     statsLabel.TextXAlignment = Enum.TextXAlignment.Left
@@ -330,11 +381,13 @@ end
 
 local function updateStats()
     if not cache.StatsLabel then return end
-    cache.StatsLabel.Text = string.format("Бондов собрано: %d\nВремя работы: %d сек\nПерезапусков: %d/%d",
+    cache.StatsLabel.Text = string.format("Бондов собрано: %d\nВремя работы: %d сек\nПерезапусков: %d/%d\nЗастреваний: %d/%d",
         state.BondsCollected,
         math.floor(state.TotalRuntime + (state.FarmTimerActive and (tick() - state.FarmStartTime) or 0)),
         state.RetryCount,
-        state.MaxRetries
+        state.MaxRetries,
+        state.StuckCount,
+        state.MaxStuckCount
     )
 end
 
@@ -426,10 +479,17 @@ local function initializeAutoFarm()
                 }
 
                 local function teleportTo(root, cf)
+                    local operationStart = tick()
                     return safeCall(function()
                         if not root or not root.Parent or not root:IsA("BasePart") then 
                             return false 
                         end
+                        
+                        if checkIfStuck("teleportTo", operationStart) then
+                            forceReleaseCharacter(root.Parent)
+                            return false
+                        end
+                        
                         root.Anchored = true
                         root.CFrame = cf
                         safeWait(3)
@@ -441,10 +501,17 @@ local function initializeAutoFarm()
                 end
 
                 local function tweenTo(root, cf)
+                    local operationStart = tick()
                     return safeCall(function()
                         if not root or not root.Parent or not root:IsA("BasePart") then 
                             return false 
                         end
+                        
+                        if checkIfStuck("tweenTo", operationStart) then
+                            forceReleaseCharacter(root.Parent)
+                            return false
+                        end
+                        
                         local distance = (root.Position - cf.Position).Magnitude
                         local duration = math.max(0.1, distance / settings.TweenSpeed)
                         local tween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Linear), {CFrame = cf})
@@ -460,6 +527,10 @@ local function initializeAutoFarm()
                     local foundGun = nil
                     
                     while not gunFound and tick() - startTime < timeout and settings.AutoFarmEnabled do
+                        if checkIfStuck("getLockedGun", startTime) then
+                            return nil
+                        end
+                        
                         local runtime = Workspace:FindFirstChild("RuntimeItems")
                         if runtime then
                             for _, v in ipairs(runtime:GetChildren()) do
@@ -485,8 +556,14 @@ local function initializeAutoFarm()
                 end
 
                 local function sitInGun(root)
+                    local operationStart = tick()
                     if not root or not root.Parent or not root:IsA("BasePart") then 
                         return false 
+                    end
+                    
+                    if checkIfStuck("sitInGun_precheck", operationStart) then
+                        forceReleaseCharacter(root.Parent)
+                        return false
                     end
                     
                     local gun = getLockedGunWithTimeout(settings.GunSearchTimeout)
@@ -501,6 +578,12 @@ local function initializeAutoFarm()
                             seat.Disabled = false 
                             safeWait(0.5)
                         end
+                        
+                        if checkIfStuck("sitInGun_teleport", operationStart) then
+                            forceReleaseCharacter(root.Parent)
+                            return false
+                        end
+                        
                         return teleportTo(root, seat.CFrame)
                     end
                     return false
@@ -515,10 +598,17 @@ local function initializeAutoFarm()
                 end
 
                 local function freezeMidAir(root)
+                    local operationStart = tick()
                     return safeCall(function()
                         if not root or not root.Parent or not root:IsA("BasePart") then 
                             return false 
                         end
+                        
+                        if checkIfStuck("freezeMidAir", operationStart) then
+                            forceReleaseCharacter(root.Parent)
+                            return false
+                        end
+                        
                         root.Anchored = true
                         root.CFrame = CFrame.new(root.Position + Vector3.new(0, 5, 0))
                         safeWait(1)
@@ -530,8 +620,14 @@ local function initializeAutoFarm()
                 end
 
                 local function tryTweenToBond(root)
+                    local operationStart = tick()
                     if not root or not root.Parent or not root:IsA("BasePart") then 
                         return false 
+                    end
+                    
+                    if checkIfStuck("tryTweenToBond", operationStart) then
+                        forceReleaseCharacter(root.Parent)
+                        return false
                     end
                     
                     local found = false
@@ -560,12 +656,20 @@ local function initializeAutoFarm()
                 end
 
                 local function setupGun(root, humanoid)
+                    local operationStart = tick()
                     if not root or not root.Parent or not root:IsA("BasePart") or not humanoid then 
                         return false 
                     end
                     
+                    if checkIfStuck("setupGun", operationStart) then
+                        forceReleaseCharacter(root.Parent)
+                        return false
+                    end
+                    
                     local success = safeCall(function()
-                        teleportTo(root, constants.GunCFrame)
+                        if not teleportTo(root, constants.GunCFrame) then
+                            return false
+                        end
                         
                         local gunSuccess = sitInGun(root)
                         if not gunSuccess then
@@ -576,7 +680,11 @@ local function initializeAutoFarm()
                         
                         safeWait(0.6)
                         jumpOff(humanoid)
-                        freezeMidAir(root)
+                        
+                        if not freezeMidAir(root) then
+                            return false
+                        end
+                        
                         safeWait(0.5)
                         
                         gunSuccess = sitInGun(root)
@@ -626,6 +734,10 @@ local function initializeAutoFarm()
                     local root, humanoid
                     
                     while tick() - startTime < 15 and settings.AutoFarmEnabled do
+                        if checkIfStuck("farmCharacter_wait", startTime) then
+                            return
+                        end
+                        
                         root = character:FindFirstChild("HumanoidRootPart")
                         humanoid = character:FindFirstChild("Humanoid")
                         
@@ -651,6 +763,11 @@ local function initializeAutoFarm()
                             break
                         end
                         
+                        if checkIfStuck("farmCharacter_loop", startTime) then
+                            forceReleaseCharacter(character)
+                            break
+                        end
+                        
                         if not started then
                             local setupSuccess = setupGun(root, humanoid)
                             if not setupSuccess then
@@ -663,7 +780,9 @@ local function initializeAutoFarm()
                         local foundBond = tryTweenToBond(root)
                         if not foundBond then
                             if currentIndex <= #bondPoints then
-                                teleportTo(root, bondPoints[currentIndex])
+                                if not teleportTo(root, bondPoints[currentIndex]) then
+                                    break
+                                end
                                 currentIndex = currentIndex + 1
                             else
                                 safeCall(function()
