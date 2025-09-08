@@ -2,7 +2,6 @@ local AUTO_FARM_ENABLED = true
 local CHECK_INTERVAL = 2
 local MAX_FARM_TIME = 120
 
--- Инициализация глобальных переменных
 if not getgenv().AutoFarmCore then
     getgenv().AutoFarmCore = {
         Settings = {
@@ -14,7 +13,9 @@ if not getgenv().AutoFarmCore then
             GunSearchTimeout = 20,
             MaxErrors = 10,
             ErrorCooldown = 5,
-            SafetyChecks = true
+            SafetyChecks = true,
+            AutoRespawn = true, -- Новое: Авто-респавн при смерти
+            PriorityTargeting = true -- Новое: Приоритет ближайших целей
         },
         State = {
             Initialized = false,
@@ -26,7 +27,9 @@ if not getgenv().AutoFarmCore then
             ErrorCount = 0,
             LastErrorTime = 0,
             RetryCount = 0,
-            MaxRetries = 5
+            MaxRetries = 5,
+            BondsCollected = 0, -- Новое: Счетчик бондов
+            TotalRuntime = 0 -- Новое: Общее время работы
         },
         Connections = {},
         Cache = {
@@ -62,6 +65,7 @@ cache.Services.TweenService = game:GetService("TweenService")
 cache.Services.ReplicatedStorage = game:GetService("ReplicatedStorage")
 cache.Services.RunService = game:GetService("RunService")
 cache.Services.ScriptContext = game:GetService("ScriptContext")
+cache.Services.UserInputService = game:GetService("UserInputService") -- Новое: Для GUI
 
 local Players = cache.Services.Players
 local Workspace = cache.Services.Workspace
@@ -69,11 +73,36 @@ local TweenService = cache.Services.TweenService
 local ReplicatedStorage = cache.Services.ReplicatedStorage
 local RunService = cache.Services.RunService
 local ScriptContext = cache.Services.ScriptContext
+local UIS = cache.Services.UserInputService
 
 -- Логирование с меткой времени
 local function log(message, level)
     level = level or "INFO"
     print(string.format("[%s] [AutoFarm] [%s]: %s", os.date("%X"), level, message))
+end
+
+-- Новое: Функция полной остановки скрипта
+local function emergencyShutdown()
+    log("АВАРИЙНАЯ ОСТАНОВКА АКТИВИРОВАНА", "FATAL")
+    settings.AutoFarmEnabled = false
+    getgenv().autoFarmBond = false
+    getgenv().CollectBond = false
+    
+    safeDisconnectAll()
+    if cache.GUI then
+        pcall(function() cache.GUI:Destroy() end)
+        cache.GUI = nil
+    end
+end
+
+-- Новое: Горячая клавиша для экстренной остановки (Shift + P)
+local function setupEmergencyHotkey()
+    manageConnection(UIS.InputBegan:Connect(function(input, processed)
+        if processed then return end
+        if input.KeyCode == Enum.KeyCode.P and UIS:IsKeyDown(Enum.KeyCode.LeftShift) then
+            emergencyShutdown()
+        end
+    end), "emergency_hotkey")
 end
 
 -- Обработчик ошибок
@@ -248,11 +277,106 @@ end
 local function stopFarmTimer()
     if state.FarmTimerActive then
         local elapsedTime = tick() - state.FarmStartTime
+        state.TotalRuntime = state.TotalRuntime + elapsedTime
         log(string.format("Таймер фарма остановлен. Прошло времени: %d секунд", 
             math.floor(elapsedTime)), "INFO")
         state.FarmTimerActive = false
         state.WarningShown = false
     end
+end
+
+-- Новое: Функция создания GUI
+local function createControlPanel()
+    if cache.GUI then pcall(function() cache.GUI:Destroy() end) end
+    
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "AutoFarmPanel"
+    screenGui.Parent = game:GetService("CoreGui")
+    
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.new(0, 300, 0, 200)
+    frame.Position = UDim2.new(0, 10, 0, 10)
+    frame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    frame.BorderSizePixel = 0
+    frame.Parent = screenGui
+    
+    local title = Instance.new("TextLabel")
+    title.Size = UDim2.new(1, 0, 0, 30)
+    title.Text = "AutoFarm Control Panel"
+    title.TextColor3 = Color3.fromRGB(255, 255, 255)
+    title.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+    title.Parent = frame
+    
+    -- Кнопка экстренной остановки
+    local emergencyBtn = Instance.new("TextButton")
+    emergencyBtn.Size = UDim2.new(1, -20, 0, 30)
+    emergencyBtn.Position = UDim2.new(0, 10, 0, 40)
+    emergencyBtn.Text = "EMERGENCY STOP (Shift+P)"
+    emergencyBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    emergencyBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+    emergencyBtn.Parent = frame
+    emergencyBtn.MouseButton1Click:Connect(emergencyShutdown)
+    
+    -- Статистика
+    local statsLabel = Instance.new("TextLabel")
+    statsLabel.Size = UDim2.new(1, -20, 0, 60)
+    statsLabel.Position = UDim2.new(0, 10, 0, 80)
+    statsLabel.Text = "Бондов собрано: 0\nВремя работы: 0 сек"
+    statsLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    statsLabel.BackgroundTransparency = 1
+    statsLabel.TextXAlignment = Enum.TextXAlignment.Left
+    statsLabel.Parent = frame
+    cache.StatsLabel = statsLabel
+    
+    -- Переключатель авто-респавна
+    local respawnToggle = Instance.new("TextButton")
+    respawnToggle.Size = UDim2.new(1, -20, 0, 30)
+    respawnToggle.Position = UDim2.new(0, 10, 0, 150)
+    respawnToggle.Text = "AutoRespawn: ON"
+    respawnToggle.TextColor3 = Color3.fromRGB(255, 255, 255)
+    respawnToggle.BackgroundColor3 = Color3.fromRGB(50, 150, 50)
+    respawnToggle.Parent = frame
+    respawnToggle.MouseButton1Click:Connect(function()
+        settings.AutoRespawn = not settings.AutoRespawn
+        respawnToggle.Text = "AutoRespawn: " .. (settings.AutoRespawn and "ON" or "OFF")
+        respawnToggle.BackgroundColor3 = settings.AutoRespawn and Color3.fromRGB(50, 150, 50) or Color3.fromRGB(150, 50, 50)
+    end)
+    
+    cache.GUI = screenGui
+    return screenGui
+end
+
+-- Новое: Обновление статистики в GUI
+local function updateStats()
+    if not cache.StatsLabel then return end
+    cache.StatsLabel.Text = string.format("Бондов собрано: %d\nВремя работы: %d сек\nПерезапусков: %d/%d",
+        state.BondsCollected,
+        math.floor(state.TotalRuntime + (state.FarmTimerActive and (tick() - state.FarmStartTime) or 0)),
+        state.RetryCount,
+        state.MaxRetries
+    )
+end
+
+-- Новое: Умный поиск ближайшего бонда
+local function findNearestBond(position)
+    local runtime = Workspace:FindFirstChild("RuntimeItems")
+    if not runtime then return nil end
+    
+    local nearestBond = nil
+    local minDistance = math.huge
+    
+    for _, item in ipairs(runtime:GetChildren()) do
+        if not settings.AutoFarmEnabled then break end
+        if item:IsA("Model") and item.Name == constants.BondName then
+            local distance = (item:GetPivot().Position - position).Magnitude
+            if distance < minDistance then
+                minDistance = distance
+                nearestBond = item
+            end
+        end
+    end
+    
+    return nearestBond
 end
 
 -- Основная логика фарма
@@ -261,8 +385,12 @@ local function initializeAutoFarm()
     state.Initialized = true
     
     setupErrorHandler()
+    setupEmergencyHotkey()
+    createControlPanel()
     
     while settings.AutoFarmEnabled do
+        updateStats() -- Новое: Обновляем статистику
+        
         if not state.GamePlaceId then
             while game.PlaceId == 0 and settings.AutoFarmEnabled do
                 safeWait(1)
@@ -429,15 +557,25 @@ local function initializeAutoFarm()
                     
                     local found = false
                     safeCall(function()
-                        local runtime = Workspace:FindFirstChild("RuntimeItems")
-                        if not runtime then return end
-                        
-                        for _, v in ipairs(runtime:GetChildren()) do
-                            if not settings.AutoFarmEnabled then break end
-                            if v:IsA("Model") and v.Name == constants.BondName then
-                                tweenTo(root, CFrame.new(v:GetPivot().Position + Vector3.new(0, 4, 0)))
+                        if settings.PriorityTargeting then
+                            -- Новое: Умный поиск ближайшего бонда
+                            local nearestBond = findNearestBond(root.Position)
+                            if nearestBond then
+                                tweenTo(root, CFrame.new(nearestBond:GetPivot().Position + Vector3.new(0, 4, 0)))
                                 found = true
-                                break
+                            end
+                        else
+                            -- Старый метод
+                            local runtime = Workspace:FindFirstChild("RuntimeItems")
+                            if not runtime then return end
+                            
+                            for _, v in ipairs(runtime:GetChildren()) do
+                                if not settings.AutoFarmEnabled then break end
+                                if v:IsA("Model") and v.Name == constants.BondName then
+                                    tweenTo(root, CFrame.new(v:GetPivot().Position + Vector3.new(0, 4, 0)))
+                                    found = true
+                                    break
+                                end
                             end
                         end
                     end)
@@ -478,7 +616,7 @@ local function initializeAutoFarm()
                     return success or false
                 end
 
-                -- Collect Bond
+                -- Collect Bond с подсчетом
                 local lastCollectTime = 0
                 local activateRemote = findInHierarchy(ReplicatedStorage, constants.ActivatePath)
                 
@@ -497,6 +635,8 @@ local function initializeAutoFarm()
                             if not settings.AutoFarmEnabled then break end
                             if bond:IsA("Model") and bond.Name == constants.BondName then
                                 activateRemote:FireServer(bond)
+                                state.BondsCollected = state.BondsCollected + 1 -- Новое: Счетчик
+                                updateStats() -- Новое: Обновляем GUI
                                 break
                             end
                         end
@@ -529,6 +669,8 @@ local function initializeAutoFarm()
                     local started = false
 
                     while humanoid.Health > 0 and settings.AutoFarmEnabled and state.IsInGame do
+                        updateStats() -- Новое: Обновляем статистику
+                        
                         if checkFarmTime(character) then
                             break
                         end
@@ -561,6 +703,12 @@ local function initializeAutoFarm()
                     end
                     
                     stopFarmTimer()
+                    
+                    -- Новое: Авто-респавн после смерти
+                    if settings.AutoRespawn and humanoid and humanoid.Health <= 0 then
+                        log("Персонаж умер. Ожидание респавна...", "INFO")
+                        safeWait(5)
+                    end
                 end
 
                 manageConnection(player.CharacterAdded:Connect(function(character)
@@ -569,6 +717,13 @@ local function initializeAutoFarm()
                         farmCharacter(character)
                     end
                 end), "character_added")
+
+                -- Новое: Отслеживание смерти для авто-респавна
+                manageConnection(player.CharacterRemoving:Connect(function(character)
+                    if settings.AutoFarmEnabled and settings.AutoRespawn then
+                        log("Персонаж удален. Ожидание нового...", "INFO")
+                    end
+                end), "character_removed")
 
                 if player.Character then
                     safeWait(2)
@@ -595,6 +750,7 @@ local function initializeAutoFarm()
                 end), "userid_changed")
 
                 while state.IsInGame and settings.AutoFarmEnabled do
+                    updateStats()
                     safeWait(1)
                 end
 
@@ -639,5 +795,6 @@ end
 
 -- Главная инициализация
 log("Скрипт инициализирован", "INFO")
+log("Экстренная остановка: Shift + P", "INFO")
 protectedCallWithRetry()
 task.spawn(monitorPlaceId)
