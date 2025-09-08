@@ -1,270 +1,643 @@
 local AUTO_FARM_ENABLED = true
-local SELF_HEALING = true
-local STEALTH_MODE = true
-local AUTO_RESTART = true
+local CHECK_INTERVAL = 2
+local MAX_FARM_TIME = 120
 
--- Умная система настроек
-local ADAPTIVE_SETTINGS = {
-    CheckInterval = 1.5,
-    MaxFarmTime = 120,
-    ErrorThreshold = 5,
-    PerformanceScanInterval = 30,
-    MemoryCleanupInterval = 60,
-    StealthLevel = 8
-}
-
--- Автоматический регулятор скорости
-local function adaptiveSpeedController()
-    local fps = math.floor(1/RunService.Heartbeat:Wait())
-    local baseDelay = 0.3
-    
-    if fps < 20 then
-        return baseDelay * 2.5
-    elseif fps < 30 then
-        return baseDelay * 1.8
-    elseif fps < 45 then
-        return baseDelay * 1.3
-    else
-        return baseDelay
-    end
-end
-
--- Система автоматического перезапуска
-local function autoRestartSystem()
-    if not AUTO_RESTART then return end
-    
-    local function scheduleRestart()
-        while AUTO_FARM_ENABLED do
-            local uptime = tick() - (getgenv().FarmStartTime or tick())
-            
-            -- Перезапуск каждые 30-45 минут
-            if uptime > math.random(1800, 2700) then
-                warn("🔄 Запланированный перезапуск для избежания обнаружения")
-                
-                protectedCall(function()
-                    local player = Services.Players.LocalPlayer
-                    if player and player.Character then
-                        local humanoid = player.Character:FindFirstChild("Humanoid")
-                        if humanoid then
-                            humanoid:TakeDamage(humanoid.MaxHealth)
-                        end
-                    end
-                end)
-                
-                task.wait(5)
-                break
-            end
-            task.wait(30)
-        end
-    end
-    
-    task.spawn(scheduleRestart)
-end
-
--- Умный детектор античита
-local function antiCheatDetector()
-    if not STEALTH_MODE then return end
-    
-    local suspiciousPatterns = {
-        "ScriptAnalysis",
-        "AntiCheat", 
-        "SecurityScan",
-        "BehaviorMonitor",
-        "MemoryScanner"
+-- Инициализация глобальных переменных
+if not getgenv().AutoFarmCore then
+    getgenv().AutoFarmCore = {
+        Settings = {
+            AutoFarmEnabled = AUTO_FARM_ENABLED,
+            CheckInterval = CHECK_INTERVAL,
+            MaxFarmTime = MAX_FARM_TIME,
+            TweenSpeed = 1000,
+            CollectDelay = 0.01,
+            GunSearchTimeout = 20,
+            MaxErrors = 10,
+            ErrorCooldown = 5,
+            SafetyChecks = true
+        },
+        State = {
+            Initialized = false,
+            GamePlaceId = nil,
+            IsInGame = false,
+            FarmStartTime = 0,
+            FarmTimerActive = false,
+            WarningShown = false,
+            ErrorCount = 0,
+            LastErrorTime = 0,
+            RetryCount = 0,
+            MaxRetries = 5
+        },
+        Connections = {},
+        Cache = {
+            Services = {},
+            Remotes = {}
+        },
+        Constants = {
+            BondName = "Bond",
+            GunName = "MaximGun",
+            RemotesPath = {"Remotes", "EndDecision"},
+            ActivatePath = {"Shared", "Network", "RemotePromise", "Remotes", "C_ActivateObject"},
+            GunCFrame = CFrame.new(350.5, 50.89, -9100.78),
+            RangeMaxGun = 200,
+            ErrorPatterns = {
+                "attempt to iterate over a nil value",
+                "WeaponController",
+                "ReplicatedStorage.Client.Game.Controllers"
+            }
+        }
     }
+end
+
+local core = getgenv().AutoFarmCore
+local settings = core.Settings
+local state = core.State
+local constants = core.Constants
+local cache = core.Cache
+
+-- Кэширование сервисов
+cache.Services.Players = game:GetService("Players")
+cache.Services.Workspace = game:GetService("Workspace")
+cache.Services.TweenService = game:GetService("TweenService")
+cache.Services.ReplicatedStorage = game:GetService("ReplicatedStorage")
+cache.Services.RunService = game:GetService("RunService")
+cache.Services.ScriptContext = game:GetService("ScriptContext")
+
+local Players = cache.Services.Players
+local Workspace = cache.Services.Workspace
+local TweenService = cache.Services.TweenService
+local ReplicatedStorage = cache.Services.ReplicatedStorage
+local RunService = cache.Services.RunService
+local ScriptContext = cache.Services.ScriptContext
+
+-- Логирование с меткой времени
+local function log(message, level)
+    level = level or "INFO"
+    print(string.format("[%s] [AutoFarm] [%s]: %s", os.date("%X"), level, message))
+end
+
+-- Обработчик ошибок
+local function handleError(err, severity, shouldRetry)
+    severity = severity or "ERROR"
+    shouldRetry = shouldRetry or false
     
-    local function monitorServices()
-        for _, service in ipairs(game:GetChildren()) do
-            for _, pattern in ipairs(suspiciousPatterns) do
-                if string.find(service.Name, pattern) then
-                    warn("⚠️ Обнаружена система защиты: "..service.Name)
-                    ADAPTIVE_SETTINGS.StealthLevel = 10
-                    return true
-                end
-            end
+    log("Ошибка: " .. tostring(err), severity)
+    
+    if severity == "FATAL" and shouldRetry then
+        state.RetryCount = state.RetryCount + 1
+        if state.RetryCount <= state.MaxRetries then
+            log(string.format("Попытка перезапуска %d/%d", state.RetryCount, state.MaxRetries), "WARN")
+            safeDisconnectAll()
+            task.wait(3)
+            safeInitialize()
+        else
+            log("Достигнут лимит перезапусков. Скрипт остановлен.", "FATAL")
+            settings.AutoFarmEnabled = false
         end
+    end
+end
+
+-- Безопасное выполнение функции
+local function safeCall(func, ...)
+    if not settings.AutoFarmEnabled then return false end
+    local success, result = pcall(func, ...)
+    if not success then 
+        handleError(result, "ERROR")
         return false
     end
-    
-    task.spawn(function()
-        while AUTO_FARM_ENABLED do
-            if monitorServices() then
-                -- Снижаем активность при обнаружении защиты
-                ADAPTIVE_SETTINGS.CheckInterval = 3
-                ADAPTIVE_SETTINGS.MaxFarmTime = 90
-            end
-            task.wait(15)
-        end
-    end)
+    return result
 end
 
--- Автоматический сбор статистики
-local function analyticsSystem()
-    local stats = {
-        BondsCollected = 0,
-        SessionsCompleted = 0,
-        ErrorsEncountered = 0,
-        TotalUptime = 0
-    }
-    
-    local function trackPerformance()
-        while AUTO_FARM_ENABLED do
-            stats.TotalUptime = stats.TotalUptime + 1
-            
-            -- Автоматическая корректировка настроек
-            if stats.ErrorsEncountered > 10 then
-                ADAPTIVE_SETTINGS.CheckInterval = math.min(ADAPTIVE_SETTINGS.CheckInterval + 0.5, 5)
-            elseif stats.ErrorsEncountered < 2 then
-                ADAPTIVE_SETTINGS.CheckInterval = math.max(ADAPTIVE_SETTINGS.CheckInterval - 0.1, 0.5)
-            end
-            
-            task.wait(1)
+-- Управление соединениями
+local function manageConnection(connection, key)
+    if not settings.AutoFarmEnabled then 
+        if connection then 
+            pcall(function() connection:Disconnect() end)
         end
+        return 
     end
     
-    return {
-        Stats = stats,
-        Track = trackPerformance,
-        Report = function()
-            return string.format("📊 Статистика: %d бондов | %d сессий | %d ошибок", 
-                stats.BondsCollected, stats.SessionsCompleted, stats.ErrorsEncountered)
-        end
-    }
-end
-
--- Система самообучения
-local function machineLearningSystem()
-    local patterns = {
-        SuccessfulPaths = {},
-        FailedPaths = {},
-        OptimalTimings = {}
-    }
-    
-    local function analyzePatterns()
-        while AUTO_FARM_ENABLED do
-            -- Анализ успешных маршрутов
-            if #patterns.SuccessfulPaths > 5 then
-                ADAPTIVE_SETTINGS.StealthLevel = math.min(ADAPTIVE_SETTINGS.StealthLevel + 1, 10)
-            end
-            
-            -- Анализ таймингов
-            local avgTime = 0
-            for _, time in ipairs(patterns.OptimalTimings) do
-                avgTime = avgTime + time
-            end
-            avgTime = avgTime / #patterns.OptimalTimings
-            
-            if avgTime > 0 then
-                ADAPTIVE_SETTINGS.MaxFarmTime = math.floor(avgTime * 1.2)
-            end
-            
-            task.wait(60)
-        end
+    if key and core.Connections[key] then
+        pcall(function()
+            core.Connections[key]:Disconnect()
+        end)
     end
     
-    return {
-        Learn = function(success, timeTaken)
-            if success then
-                table.insert(patterns.SuccessfulPaths, timeTaken)
-            else
-                table.insert(patterns.FailedPaths, timeTaken)
-            end
-            table.insert(patterns.OptimalTimings, timeTaken)
-            
-            if #patterns.SuccessfulPaths > 20 then
-                table.remove(patterns.SuccessfulPaths, 1)
-            end
-            if #patterns.FailedPaths > 20 then
-                table.remove(patterns.FailedPaths, 1)
-            end
-            if #patterns.OptimalTimings > 30 then
-                table.remove(patterns.OptimalTimings, 1)
-            end
-        end,
-        Analyze = analyzePatterns
-    }
+    if key and connection then
+        core.Connections[key] = connection
+    end
+    
+    return connection
 end
 
--- Автоматическое обновление кода
-local function selfUpdateSystem()
-    local version = "1.2.0"
-    local updateUrl = "https://raw.githubusercontent.com/fakeurl/autofarm/main/latest.lua"
-    
-    local function checkForUpdates()
-        while AUTO_FARM_ENABLED do
+local function safeDisconnectAll()
+    for key, connection in pairs(core.Connections) do
+        if connection and typeof(connection) == "RBXScriptConnection" then
             pcall(function()
-                local response = game:HttpGet(updateUrl)
-                if response and response ~= "" then
-                    local newVersion = string.match(response, "version = \"(%d+%.%d+%.%d+)\"")
-                    if newVersion and newVersion ~= version then
-                        warn("🔁 Обнаружено обновление: "..newVersion)
-                        loadstring(response)()
+                connection:Disconnect()
+            end)
+        end
+        core.Connections[key] = nil
+    end
+end
+
+-- Безопасное ожидание
+local function safeWait(duration)
+    if not settings.AutoFarmEnabled then return false end
+    local start = tick()
+    while tick() - start < duration and settings.AutoFarmEnabled do
+        task.wait(0.1)
+    end
+    return settings.AutoFarmEnabled
+end
+
+-- Поиск в иерархии
+local function findInHierarchy(parent, path)
+    if not parent then return nil end
+    local current = parent
+    for _, name in ipairs(path) do
+        current = current:FindFirstChild(name)
+        if not current then return nil end
+    end
+    return current
+end
+
+-- Проверка ошибок
+local function isTargetError(message)
+    for _, pattern in ipairs(constants.ErrorPatterns) do
+        if string.find(message, pattern) then
+            return true
+        end
+    end
+    return false
+end
+
+-- Настройка обработчика ошибок
+local function setupErrorHandler()
+    local function onErrorMessage(message, traceback, script)
+        if not settings.AutoFarmEnabled then return end
+        
+        if isTargetError(message) then
+            local currentTime = tick()
+            
+            if currentTime - state.LastErrorTime > settings.ErrorCooldown then
+                state.ErrorCount = 0
+            end
+            
+            state.ErrorCount = state.ErrorCount + 1
+            state.LastErrorTime = currentTime
+            
+            log(string.format("Целевая ошибка (%d/%d): %s", 
+                state.ErrorCount, settings.MaxErrors, message), "WARN")
+            
+            if state.ErrorCount >= settings.MaxErrors then
+                state.ErrorCount = 0
+                local player = Players.LocalPlayer
+                if player and player.Character then
+                    local humanoid = player.Character:FindFirstChild("Humanoid")
+                    if humanoid and humanoid.Health > 0 then
+                        log("Слишком много ошибок! Убиваем персонажа...", "WARN")
+                        pcall(function()
+                            humanoid:ChangeState(Enum.HumanoidStateType.Dead)
+                        end)
                     end
                 end
+            end
+        end
+    end
+
+    manageConnection(ScriptContext.Error:Connect(onErrorMessage), "error_handler")
+end
+
+-- Проверка времени фарма
+local function checkFarmTime(character)
+    if not character then return false end
+    
+    local humanoid = character:FindFirstChild("Humanoid")
+    if not humanoid or humanoid.Health <= 0 then return false end
+    
+    local currentTime = tick()
+    local elapsedTime = currentTime - state.FarmStartTime
+    
+    if elapsedTime >= settings.MaxFarmTime then
+        log(string.format("Время фарма истекло (%d сек). Убиваем персонажа...", 
+            math.floor(elapsedTime)), "WARN")
+        pcall(function()
+            humanoid:ChangeState(Enum.HumanoidStateType.Dead)
+        end)
+        state.FarmTimerActive = false
+        return true
+    end
+    
+    if elapsedTime >= settings.MaxFarmTime - 10 and not state.WarningShown then
+        log("До окончания фарма осталось 10 секунд", "INFO")
+        state.WarningShown = true
+    end
+    
+    return false
+end
+
+-- Управление таймером фарма
+local function startFarmTimer()
+    state.FarmStartTime = tick()
+    state.FarmTimerActive = true
+    state.WarningShown = false
+    log(string.format("Таймер фарма запущен (максимум %d секунд)", settings.MaxFarmTime), "INFO")
+end
+
+local function stopFarmTimer()
+    if state.FarmTimerActive then
+        local elapsedTime = tick() - state.FarmStartTime
+        log(string.format("Таймер фарма остановлен. Прошло времени: %d секунд", 
+            math.floor(elapsedTime)), "INFO")
+        state.FarmTimerActive = false
+        state.WarningShown = false
+    end
+end
+
+-- Основная логика фарма
+local function initializeAutoFarm()
+    if state.Initialized then return end
+    state.Initialized = true
+    
+    setupErrorHandler()
+    
+    while settings.AutoFarmEnabled do
+        if not state.GamePlaceId then
+            while game.PlaceId == 0 and settings.AutoFarmEnabled do
+                safeWait(1)
+            end
+            if settings.AutoFarmEnabled then
+                state.GamePlaceId = game.PlaceId
+                log("Определен ID игры: " .. state.GamePlaceId, "INFO")
+            end
+        end
+        
+        local isInGame = game.PlaceId == state.GamePlaceId
+        
+        if isInGame and settings.AutoFarmEnabled then
+            log("Запуск автофарма в игре...", "INFO")
+            state.IsInGame = true
+            
+            local success, err = pcall(function()
+                local EndDecision
+                local maxWaitTime = 30
+                local startTime = tick()
+                
+                while not EndDecision and tick() - startTime < maxWaitTime and settings.AutoFarmEnabled do
+                    EndDecision = findInHierarchy(ReplicatedStorage, constants.RemotesPath)
+                    if not EndDecision then
+                        safeWait(1)
+                    end
+                end
+                
+                if not EndDecision then
+                    error("Не удалось найти EndDecision remote")
+                end
+
+                local player = Players.LocalPlayer
+                if not player then return end
+                
+                getgenv().autoFarmBond = true
+                getgenv().CollectBond = true
+                
+                local bondPoints = {
+                    CFrame.new(-475.66, 200.77, 21969.36),
+                    CFrame.new(-319.90, 200.77, 14036.94),
+                    CFrame.new(-15.96, 200.77, 6099.45),
+                    CFrame.new(-615.17, 200.77, -1836.15),
+                    CFrame.new(249.76, 200.77, -9067.68),
+                    CFrame.new(-138.72, 200.77, -17713.91),
+                    CFrame.new(249.76, 200.77, -9067.68),
+                    CFrame.new(228.52, 200.77, 5163.45),
+                    CFrame.new(-860.02, 200.77, -27428.81),
+                    CFrame.new(10.24, 200.77, -33604.30),
+                    CFrame.new(-322.95, 200.77, -41545.23),
+                    CFrame.new(-384.79, 40, -48746.83),
+                    CFrame.new(-379.98, 3, -49471.26),
+                    CFrame.new(-380.45, -23, -49332.89),
+                }
+
+                local function teleportTo(root, cf)
+                    return safeCall(function()
+                        if not root or not root.Parent or not root:IsA("BasePart") then 
+                            return false 
+                        end
+                        root.Anchored = true
+                        root.CFrame = cf
+                        safeWait(3)
+                        if root and root.Parent then
+                            root.Anchored = false
+                        end
+                        return true
+                    end)
+                end
+
+                local function tweenTo(root, cf)
+                    return safeCall(function()
+                        if not root or not root.Parent or not root:IsA("BasePart") then 
+                            return false 
+                        end
+                        local distance = (root.Position - cf.Position).Magnitude
+                        local duration = math.max(0.1, distance / settings.TweenSpeed)
+                        local tween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Linear), {CFrame = cf})
+                        tween:Play()
+                        safeWait(duration)
+                        return true
+                    end)
+                end
+
+                local function getLockedGunWithTimeout(timeout)
+                    local startTime = tick()
+                    local gunFound = false
+                    local foundGun = nil
+                    
+                    while not gunFound and tick() - startTime < timeout and settings.AutoFarmEnabled do
+                        local runtime = Workspace:FindFirstChild("RuntimeItems")
+                        if runtime then
+                            for _, v in ipairs(runtime:GetChildren()) do
+                                if not settings.AutoFarmEnabled then break end
+                                if v:IsA("Model") and v.Name == constants.GunName and v:FindFirstChild("VehicleSeat") then
+                                    local seat = v:FindFirstChild("VehicleSeat")
+                                    if seat and seat:IsA("VehicleSeat") then
+                                        if (v:GetPivot().Position - constants.GunCFrame.Position).Magnitude <= constants.RangeMaxGun then
+                                            foundGun = v
+                                            gunFound = true
+                                            break
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                        if not gunFound then
+                            safeWait(0.5)
+                        end
+                    end
+                    
+                    return foundGun
+                end
+
+                local function sitInGun(root)
+                    if not root or not root.Parent or not root:IsA("BasePart") then 
+                        return false 
+                    end
+                    
+                    local gun = getLockedGunWithTimeout(settings.GunSearchTimeout)
+                    if not gun then 
+                        log("Таймаут поиска пушки! Пушка не найдена за " .. settings.GunSearchTimeout .. " секунд", "WARN")
+                        return false 
+                    end
+                    
+                    local seat = gun:FindFirstChild("VehicleSeat")
+                    if seat and seat:IsA("VehicleSeat") then
+                        if seat.Disabled then 
+                            seat.Disabled = false 
+                            safeWait(0.5)
+                        end
+                        return teleportTo(root, seat.CFrame)
+                    end
+                    return false
+                end
+
+                local function jumpOff(humanoid)
+                    safeCall(function()
+                        if humanoid and humanoid.Parent then
+                            humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+                        end
+                    end)
+                end
+
+                local function freezeMidAir(root)
+                    return safeCall(function()
+                        if not root or not root.Parent or not root:IsA("BasePart") then 
+                            return false 
+                        end
+                        root.Anchored = true
+                        root.CFrame = CFrame.new(root.Position + Vector3.new(0, 5, 0))
+                        safeWait(1)
+                        if root and root.Parent then
+                            root.Anchored = false
+                        end
+                        return true
+                    end)
+                end
+
+                local function tryTweenToBond(root)
+                    if not root or not root.Parent or not root:IsA("BasePart") then 
+                        return false 
+                    end
+                    
+                    local found = false
+                    safeCall(function()
+                        local runtime = Workspace:FindFirstChild("RuntimeItems")
+                        if not runtime then return end
+                        
+                        for _, v in ipairs(runtime:GetChildren()) do
+                            if not settings.AutoFarmEnabled then break end
+                            if v:IsA("Model") and v.Name == constants.BondName then
+                                tweenTo(root, CFrame.new(v:GetPivot().Position + Vector3.new(0, 4, 0)))
+                                found = true
+                                break
+                            end
+                        end
+                    end)
+                    return found
+                end
+
+                local function setupGun(root, humanoid)
+                    if not root or not root.Parent or not root:IsA("BasePart") or not humanoid then 
+                        return false 
+                    end
+                    
+                    local success = safeCall(function()
+                        teleportTo(root, constants.GunCFrame)
+                        
+                        local gunSuccess = sitInGun(root)
+                        if not gunSuccess then
+                            log("Не удалось сесть в пушку, убиваем персонажа...", "WARN")
+                            humanoid:ChangeState(Enum.HumanoidStateType.Dead)
+                            return false
+                        end
+                        
+                        safeWait(0.6)
+                        jumpOff(humanoid)
+                        freezeMidAir(root)
+                        safeWait(0.5)
+                        
+                        gunSuccess = sitInGun(root)
+                        if not gunSuccess then
+                            log("Не удалось сесть в пушку после прыжка, убиваем персонажа...", "WARN")
+                            humanoid:ChangeState(Enum.HumanoidStateType.Dead)
+                            return false
+                        end
+                        
+                        safeWait(0.1)
+                        return true
+                    end)
+                    
+                    return success or false
+                end
+
+                -- Collect Bond
+                local lastCollectTime = 0
+                local activateRemote = findInHierarchy(ReplicatedStorage, constants.ActivatePath)
+                
+                manageConnection(RunService.Heartbeat:Connect(function()
+                    if not settings.AutoFarmEnabled or not getgenv().CollectBond then return end
+                    
+                    local currentTime = tick()
+                    if currentTime - lastCollectTime < settings.CollectDelay then return end
+                    lastCollectTime = currentTime
+                    
+                    safeCall(function()
+                        local runtime = Workspace:FindFirstChild("RuntimeItems")
+                        if not runtime or not activateRemote then return end
+                        
+                        for _, bond in ipairs(runtime:GetChildren()) do
+                            if not settings.AutoFarmEnabled then break end
+                            if bond:IsA("Model") and bond.Name == constants.BondName then
+                                activateRemote:FireServer(bond)
+                                break
+                            end
+                        end
+                    end)
+                end), "collect_connection")
+
+                local function farmCharacter(character)
+                    if not character or not character.Parent then return end
+                    
+                    local startTime = tick()
+                    local root, humanoid
+                    
+                    while tick() - startTime < 15 and settings.AutoFarmEnabled do
+                        root = character:FindFirstChild("HumanoidRootPart")
+                        humanoid = character:FindFirstChild("Humanoid")
+                        
+                        if root and humanoid and humanoid.Health > 0 then
+                            break
+                        end
+                        safeWait(0.1)
+                    end
+                    
+                    if not root or not humanoid or humanoid.Health <= 0 then
+                        return
+                    end
+                    
+                    startFarmTimer()
+                    
+                    local currentIndex = 1
+                    local started = false
+
+                    while humanoid.Health > 0 and settings.AutoFarmEnabled and state.IsInGame do
+                        if checkFarmTime(character) then
+                            break
+                        end
+                        
+                        if not started then
+                            local setupSuccess = setupGun(root, humanoid)
+                            if not setupSuccess then
+                                stopFarmTimer()
+                                break
+                            end
+                            started = true
+                        end
+
+                        local foundBond = tryTweenToBond(root)
+                        if not foundBond then
+                            if currentIndex <= #bondPoints then
+                                teleportTo(root, bondPoints[currentIndex])
+                                currentIndex = currentIndex + 1
+                            else
+                                safeCall(function()
+                                    if humanoid and humanoid.Parent then
+                                        humanoid:ChangeState(Enum.HumanoidStateType.Dead)
+                                    end
+                                end)
+                                stopFarmTimer()
+                                break
+                            end
+                        end
+                        safeWait(0.3)
+                    end
+                    
+                    stopFarmTimer()
+                end
+
+                manageConnection(player.CharacterAdded:Connect(function(character)
+                    if settings.AutoFarmEnabled then
+                        safeWait(2)
+                        farmCharacter(character)
+                    end
+                end), "character_added")
+
+                if player.Character then
+                    safeWait(2)
+                    farmCharacter(player.Character)
+                end
+
+                local endDecisionTask
+                endDecisionTask = task.spawn(function()
+                    while settings.AutoFarmEnabled and state.IsInGame do
+                        if getgenv().autoFarmBond then
+                            safeCall(function()
+                                EndDecision:FireServer(false)
+                            end)
+                        end
+                        safeWait(0.5)
+                    end
+                end)
+
+                manageConnection(Players.LocalPlayer:GetPropertyChangedSignal("UserId"):Connect(function()
+                    if game.PlaceId ~= state.GamePlaceId then
+                        state.IsInGame = false
+                        stopFarmTimer()
+                    end
+                end), "userid_changed")
+
+                while state.IsInGame and settings.AutoFarmEnabled do
+                    safeWait(1)
+                end
+
+                safeDisconnectAll()
             end)
-            task.wait(300) -- Проверка каждые 5 минут
-        end
-    end
-    
-    task.spawn(checkForUpdates)
-end
-
--- Главная система управления
-local function masterControlSystem()
-    local analytics = analyticsSystem()
-    local mlSystem = machineLearningSystem()
-    
-    -- Запуск всех подсистем
-    autoRestartSystem()
-    antiCheatDetector()
-    selfUpdateSystem()
-    task.spawn(analytics.Track)
-    task.spawn(mlSystem.Analyze)
-    
-    -- Основной цикл с автоадаптацией
-    while AUTO_FARM_ENABLED do
-        local sessionStart = tick()
-        local success = executeFarmStrategy()
-        local sessionTime = tick() - sessionStart
-        
-        -- Машинное обучение
-        mlSystem.Learn(success, sessionTime)
-        
-        -- Сбор статистики
-        if success then
-            analytics.Stats.SessionsCompleted += 1
+            
+            if not success then
+                handleError(err, "ERROR", true)
+            end
         else
-            analytics.Stats.ErrorsEncountered += 1
+            log("Ожидание перехода в игру... Текущее место: " .. game.PlaceId, "INFO")
+            state.IsInGame = false
+            stopFarmTimer()
+            safeWait(settings.CheckInterval)
         end
-        
-        -- Автопауза при ошибках
-        if analytics.Stats.ErrorsEncountered > 5 then
-            warn("⏸️ Автопауза из-за большого количества ошибок")
-            task.wait(10)
-        end
-        
-        -- Периодический отчет
-        if analytics.Stats.SessionsCompleted % 10 == 0 then
-            warn(analytics.Report())
-        end
-        
-        dynamicWait(adaptiveSpeedController())
     end
 end
 
--- Инициализация полной системы
-protectedCall(function()
-    initializeFarmSystem()
-    task.spawn(masterControlSystem)
-end)
-
--- Резервная система активации
-getgenv().EmergencyRestart = function()
-    AUTO_FARM_ENABLED = false
-    task.wait(2)
-    AUTO_FARM_ENABLED = true
-    initializeFarmSystem()
-    masterControlSystem()
+-- Защищенный вызов с повторными попытками
+local function protectedCallWithRetry()
+    local success, err = pcall(initializeAutoFarm)
+    if not success then
+        handleError(err, "FATAL", true)
+    end
 end
 
-warn("🚀 Полная автономная система активирована. Вмешательство не требуется.")
+-- Мониторинг изменения PlaceId
+local function monitorPlaceId()
+    while settings.AutoFarmEnabled do
+        if state.GamePlaceId and game.PlaceId ~= 0 and game.PlaceId ~= state.GamePlaceId then
+            log("Обнаружен новый PlaceId. Обновляем...", "INFO")
+            state.GamePlaceId = game.PlaceId
+        end
+        
+        if state.GamePlaceId then
+            state.IsInGame = game.PlaceId == state.GamePlaceId
+        end
+        
+        safeWait(5)
+    end
+end
+
+-- Главная инициализация
+log("Скрипт инициализирован", "INFO")
+protectedCallWithRetry()
+task.spawn(monitorPlaceId)
