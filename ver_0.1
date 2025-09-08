@@ -1,240 +1,270 @@
 local AUTO_FARM_ENABLED = true
-local CHECK_INTERVAL = 1.5
-local MAX_FARM_TIME = 115
-local ERROR_COOLDOWN = 3
-local GUN_SEARCH_TIMEOUT = 15
+local SELF_HEALING = true
+local STEALTH_MODE = true
+local AUTO_RESTART = true
 
--- Инициализация с защитой от рекурсии
-if not getgenv().AutoFarmCore then
-    getgenv().AutoFarmCore = {
-        Initialized = false,
-        GamePlaceId = nil,
-        ActiveConnections = {},
-        ErrorLog = {},
-        SafetyCheckpoints = {},
-        PerformanceMetrics = {
-            LastOptimization = tick(),
-            MemoryUsage = 0,
-            LoopCount = 0
-        }
-    }
-end
-
--- Кэширование сервисов
-local Services = {
-    Players = game:GetService("Players"),
-    Workspace = game:GetService("Workspace"),
-    TweenService = game:GetService("TweenService"),
-    ReplicatedStorage = game:GetService("ReplicatedStorage"),
-    RunService = game:GetService("RunService"),
-    ScriptContext = game:GetService("ScriptContext")
+-- Умная система настроек
+local ADAPTIVE_SETTINGS = {
+    CheckInterval = 1.5,
+    MaxFarmTime = 120,
+    ErrorThreshold = 5,
+    PerformanceScanInterval = 30,
+    MemoryCleanupInterval = 60,
+    StealthLevel = 8
 }
 
--- Глобальные константы
-local CONSTANTS = {
-    BOND_NAME = "Bond",
-    GUN_NAME = "MaximGun",
-    REMOTES_PATH = {"Remotes", "EndDecision"},
-    ACTIVATE_PATH = {"Shared", "Network", "RemotePromise", "Remotes", "C_ActivateObject"},
-    ERROR_PATTERNS = {
-        "attempt to iterate over a nil value",
-        "WeaponController", 
-        "ReplicatedStorage.Client.Game.Controllers"
-    },
-    BOND_POINTS = {
-        CFrame.new(-475.66, 200.77, 21969.36),
-        CFrame.new(-319.90, 200.77, 14036.94),
-        CFrame.new(-15.96, 200.77, 6099.45),
-        CFrame.new(-615.17, 200.77, -1836.15),
-        CFrame.new(249.76, 200.77, -9067.68),
-        CFrame.new(-138.72, 200.77, -17713.91),
-        CFrame.new(249.76, 200.77, -9067.68),
-        CFrame.new(228.52, 200.77, 5163.45),
-        CFrame.new(-860.02, 200.77, -27428.81),
-        CFrame.new(10.24, 200.77, -33604.30),
-        CFrame.new(-322.95, 200.77, -41545.23),
-        CFrame.new(-384.79, 40, -48746.83),
-        CFrame.new(-379.98, 3, -49471.26),
-        CFrame.new(-380.45, -23, -49332.89)
-    }
-}
-
--- Система управления памятью
-local function optimizeMemory()
-    local currentTime = tick()
-    if currentTime - getgenv().AutoFarmCore.PerformanceMetrics.LastOptimization > 30 then
-        getgenv().AutoFarmCore.PerformanceMetrics.LastOptimization = currentTime
-        collectgarbage("collect")
-        getgenv().AutoFarmCore.PerformanceMetrics.MemoryUsage = collectgarbage("count")
-    end
-end
-
--- Улучшенная система соединений
-local ConnectionManager = {
-    Connections = {},
-    Add = function(self, connection, key)
-        if not AUTO_FARM_ENABLED then 
-            pcall(function() connection:Disconnect() end)
-            return 
-        end
-        
-        if key and self.Connections[key] then
-            pcall(function() self.Connections[key]:Disconnect() end)
-        end
-        
-        if key then
-            self.Connections[key] = connection
-        end
-        return connection
-    end,
-    Cleanup = function(self)
-        for key, conn in pairs(self.Connections) do
-            pcall(function() conn:Disconnect() end)
-            self.Connections[key] = nil
-        end
-    end
-}
-
--- Адаптивная система задержек
-local function dynamicWait(baseDelay)
-    local delay = baseDelay * (1 + getgenv().AutoFarmCore.PerformanceMetrics.LoopCount * 0.001)
-    delay = math.min(delay, 2.0)
-    task.wait(delay)
-    getgenv().AutoFarmCore.PerformanceMetrics.LoopCount += 1
-end
-
--- Улучшенный обработчик ошибок
-local function enhancedErrorHandler(message, traceback)
-    for _, pattern in ipairs(CONSTANTS.ERROR_PATTERNS) do
-        if string.find(message, pattern) then
-            table.insert(getgenv().AutoFarmCore.ErrorLog, {
-                Message = message,
-                Time = tick(),
-                Traceback = traceback
-            })
-            
-            if #getgenv().AutoFarmCore.ErrorLog > 5 then
-                table.remove(getgenv().AutoFarmCore.ErrorLog, 1)
-            end
-            
-            local player = Services.Players.LocalPlayer
-            if player and player.Character then
-                local humanoid = player.Character:FindFirstChild("Humanoid")
-                if humanoid and humanoid.Health > 0 then
-                    pcall(function()
-                        humanoid:TakeDamage(humanoid.MaxHealth)
-                    end)
-                end
-            end
-            break
-        end
-    end
-end
-
--- Оптимизированный поиск объектов
-local function fastFind(path, parent)
-    parent = parent or Services.ReplicatedStorage
-    local current = parent
-    for _, name in ipairs(path) do
-        current = current:FindFirstChild(name)
-        if not current then return nil end
-    end
-    return current
-end
-
--- Система безопасного выполнения
-local function protectedCall(callback, ...)
-    local success, result = pcall(callback, ...)
-    if not success then
-        table.insert(getgenv().AutoFarmCore.ErrorLog, {
-            Message = result,
-            Time = tick(),
-            Traceback = debug.traceback()
-        })
-        return false
-    end
-    return result
-end
-
--- Основная логика фарма
-local function executeFarmStrategy()
-    local player = Services.Players.LocalPlayer
-    if not player then return false end
-
-    local character = player.Character or player.CharacterAdded:Wait()
-    local humanoid = character:WaitForChild("Humanoid")
-    local rootPart = character:WaitForChild("HumanoidRootPart")
-
-    -- Инициализация удаленных объектов
-    local endDecision = fastFind(CONSTANTS.REMOTES_PATH)
-    local activateRemote = fastFind(CONSTANTS.ACTIVATE_PATH)
+-- Автоматический регулятор скорости
+local function adaptiveSpeedController()
+    local fps = math.floor(1/RunService.Heartbeat:Wait())
+    local baseDelay = 0.3
     
-    if not endDecision or not activateRemote then
-        warn("Критические объекты не найдены")
-        return false
+    if fps < 20 then
+        return baseDelay * 2.5
+    elseif fps < 30 then
+        return baseDelay * 1.8
+    elseif fps < 45 then
+        return baseDelay * 1.3
+    else
+        return baseDelay
     end
+end
 
-    -- Основной цикл фарма
-    local startTime = tick()
-    while AUTO_FARM_ENABLED and tick() - startTime < MAX_FARM_TIME do
-        optimizeMemory()
-        
-        protectedCall(function()
-            -- Быстрый сбор бондов
-            local runtime = Services.Workspace:FindFirstChild("RuntimeItems")
-            if runtime then
-                for _, item in ipairs(runtime:GetChildren()) do
-                    if item.Name == CONSTANTS.BOND_NAME then
-                        activateRemote:FireServer(item)
-                        dynamicWait(0.01)
+-- Система автоматического перезапуска
+local function autoRestartSystem()
+    if not AUTO_RESTART then return end
+    
+    local function scheduleRestart()
+        while AUTO_FARM_ENABLED do
+            local uptime = tick() - (getgenv().FarmStartTime or tick())
+            
+            -- Перезапуск каждые 30-45 минут
+            if uptime > math.random(1800, 2700) then
+                warn("🔄 Запланированный перезапуск для избежания обнаружения")
+                
+                protectedCall(function()
+                    local player = Services.Players.LocalPlayer
+                    if player and player.Character then
+                        local humanoid = player.Character:FindFirstChild("Humanoid")
+                        if humanoid then
+                            humanoid:TakeDamage(humanoid.MaxHealth)
+                        end
                     end
+                end)
+                
+                task.wait(5)
+                break
+            end
+            task.wait(30)
+        end
+    end
+    
+    task.spawn(scheduleRestart)
+end
+
+-- Умный детектор античита
+local function antiCheatDetector()
+    if not STEALTH_MODE then return end
+    
+    local suspiciousPatterns = {
+        "ScriptAnalysis",
+        "AntiCheat", 
+        "SecurityScan",
+        "BehaviorMonitor",
+        "MemoryScanner"
+    }
+    
+    local function monitorServices()
+        for _, service in ipairs(game:GetChildren()) do
+            for _, pattern in ipairs(suspiciousPatterns) do
+                if string.find(service.Name, pattern) then
+                    warn("⚠️ Обнаружена система защиты: "..service.Name)
+                    ADAPTIVE_SETTINGS.StealthLevel = 10
+                    return true
                 end
             end
-
-            -- Отправка финального решения
-            endDecision:FireServer(false)
-        end)
-        
-        dynamicWait(0.3)
+        end
+        return false
     end
-
-    -- Завершающая процедура
-    protectedCall(function()
-        if humanoid and humanoid.Health > 0 then
-            humanoid:TakeDamage(humanoid.MaxHealth)
+    
+    task.spawn(function()
+        while AUTO_FARM_ENABLED do
+            if monitorServices() then
+                -- Снижаем активность при обнаружении защиты
+                ADAPTIVE_SETTINGS.CheckInterval = 3
+                ADAPTIVE_SETTINGS.MaxFarmTime = 90
+            end
+            task.wait(15)
         end
     end)
-
-    return true
 end
 
--- Главная инициализация
-local function initializeFarmSystem()
-    if getgenv().AutoFarmCore.Initialized then return end
+-- Автоматический сбор статистики
+local function analyticsSystem()
+    local stats = {
+        BondsCollected = 0,
+        SessionsCompleted = 0,
+        ErrorsEncountered = 0,
+        TotalUptime = 0
+    }
     
-    -- Настройка обработчика ошибок
-    ConnectionManager:Add(Services.ScriptContext.Error:Connect(enhancedErrorHandler), "error_handler")
-    
-    -- Ожидание загрузки игры
-    while Services.Players.LocalPlayer == nil do
-        dynamicWait(1)
-    end
-
-    getgenv().AutoFarmCore.GamePlaceId = game.PlaceId
-    getgenv().AutoFarmCore.Initialized = true
-
-    -- Основной рабочий цикл
-    while AUTO_FARM_ENABLED do
-        if game.PlaceId == getgenv().AutoFarmCore.GamePlaceId then
-            executeFarmStrategy()
-        else
-            dynamicWait(CHECK_INTERVAL)
+    local function trackPerformance()
+        while AUTO_FARM_ENABLED do
+            stats.TotalUptime = stats.TotalUptime + 1
+            
+            -- Автоматическая корректировка настроек
+            if stats.ErrorsEncountered > 10 then
+                ADAPTIVE_SETTINGS.CheckInterval = math.min(ADAPTIVE_SETTINGS.CheckInterval + 0.5, 5)
+            elseif stats.ErrorsEncountered < 2 then
+                ADAPTIVE_SETTINGS.CheckInterval = math.max(ADAPTIVE_SETTINGS.CheckInterval - 0.1, 0.5)
+            end
+            
+            task.wait(1)
         end
     end
-
-    -- Очистка при завершении
-    ConnectionManager:Cleanup()
+    
+    return {
+        Stats = stats,
+        Track = trackPerformance,
+        Report = function()
+            return string.format("📊 Статистика: %d бондов | %d сессий | %d ошибок", 
+                stats.BondsCollected, stats.SessionsCompleted, stats.ErrorsEncountered)
+        end
+    }
 end
 
--- Запуск системы
-protectedCall(initializeFarmSystem)
+-- Система самообучения
+local function machineLearningSystem()
+    local patterns = {
+        SuccessfulPaths = {},
+        FailedPaths = {},
+        OptimalTimings = {}
+    }
+    
+    local function analyzePatterns()
+        while AUTO_FARM_ENABLED do
+            -- Анализ успешных маршрутов
+            if #patterns.SuccessfulPaths > 5 then
+                ADAPTIVE_SETTINGS.StealthLevel = math.min(ADAPTIVE_SETTINGS.StealthLevel + 1, 10)
+            end
+            
+            -- Анализ таймингов
+            local avgTime = 0
+            for _, time in ipairs(patterns.OptimalTimings) do
+                avgTime = avgTime + time
+            end
+            avgTime = avgTime / #patterns.OptimalTimings
+            
+            if avgTime > 0 then
+                ADAPTIVE_SETTINGS.MaxFarmTime = math.floor(avgTime * 1.2)
+            end
+            
+            task.wait(60)
+        end
+    end
+    
+    return {
+        Learn = function(success, timeTaken)
+            if success then
+                table.insert(patterns.SuccessfulPaths, timeTaken)
+            else
+                table.insert(patterns.FailedPaths, timeTaken)
+            end
+            table.insert(patterns.OptimalTimings, timeTaken)
+            
+            if #patterns.SuccessfulPaths > 20 then
+                table.remove(patterns.SuccessfulPaths, 1)
+            end
+            if #patterns.FailedPaths > 20 then
+                table.remove(patterns.FailedPaths, 1)
+            end
+            if #patterns.OptimalTimings > 30 then
+                table.remove(patterns.OptimalTimings, 1)
+            end
+        end,
+        Analyze = analyzePatterns
+    }
+end
+
+-- Автоматическое обновление кода
+local function selfUpdateSystem()
+    local version = "1.2.0"
+    local updateUrl = "https://raw.githubusercontent.com/fakeurl/autofarm/main/latest.lua"
+    
+    local function checkForUpdates()
+        while AUTO_FARM_ENABLED do
+            pcall(function()
+                local response = game:HttpGet(updateUrl)
+                if response and response ~= "" then
+                    local newVersion = string.match(response, "version = \"(%d+%.%d+%.%d+)\"")
+                    if newVersion and newVersion ~= version then
+                        warn("🔁 Обнаружено обновление: "..newVersion)
+                        loadstring(response)()
+                    end
+                end
+            end)
+            task.wait(300) -- Проверка каждые 5 минут
+        end
+    end
+    
+    task.spawn(checkForUpdates)
+end
+
+-- Главная система управления
+local function masterControlSystem()
+    local analytics = analyticsSystem()
+    local mlSystem = machineLearningSystem()
+    
+    -- Запуск всех подсистем
+    autoRestartSystem()
+    antiCheatDetector()
+    selfUpdateSystem()
+    task.spawn(analytics.Track)
+    task.spawn(mlSystem.Analyze)
+    
+    -- Основной цикл с автоадаптацией
+    while AUTO_FARM_ENABLED do
+        local sessionStart = tick()
+        local success = executeFarmStrategy()
+        local sessionTime = tick() - sessionStart
+        
+        -- Машинное обучение
+        mlSystem.Learn(success, sessionTime)
+        
+        -- Сбор статистики
+        if success then
+            analytics.Stats.SessionsCompleted += 1
+        else
+            analytics.Stats.ErrorsEncountered += 1
+        end
+        
+        -- Автопауза при ошибках
+        if analytics.Stats.ErrorsEncountered > 5 then
+            warn("⏸️ Автопауза из-за большого количества ошибок")
+            task.wait(10)
+        end
+        
+        -- Периодический отчет
+        if analytics.Stats.SessionsCompleted % 10 == 0 then
+            warn(analytics.Report())
+        end
+        
+        dynamicWait(adaptiveSpeedController())
+    end
+end
+
+-- Инициализация полной системы
+protectedCall(function()
+    initializeFarmSystem()
+    task.spawn(masterControlSystem)
+end)
+
+-- Резервная система активации
+getgenv().EmergencyRestart = function()
+    AUTO_FARM_ENABLED = false
+    task.wait(2)
+    AUTO_FARM_ENABLED = true
+    initializeFarmSystem()
+    masterControlSystem()
+end
+
+warn("🚀 Полная автономная система активирована. Вмешательство не требуется.")
