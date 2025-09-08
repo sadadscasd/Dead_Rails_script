@@ -2,6 +2,7 @@ local AUTO_FARM_ENABLED = true
 local CHECK_INTERVAL = 2
 local MAX_FARM_TIME = 120
 
+-- Инициализация глобальных переменных
 if not getgenv().AutoFarmCore then
     getgenv().AutoFarmCore = {
         Settings = {
@@ -10,13 +11,10 @@ if not getgenv().AutoFarmCore then
             MaxFarmTime = MAX_FARM_TIME,
             TweenSpeed = 1000,
             CollectDelay = 0.01,
-            GunSearchTimeout = 15, -- Уменьшил таймаут
+            GunSearchTimeout = 20,
             MaxErrors = 10,
             ErrorCooldown = 5,
-            SafetyChecks = true,
-            AutoRespawn = true,
-            PriorityTargeting = true,
-            OperationTimeout = 10 -- Новое: таймаут на операции
+            SafetyChecks = true
         },
         State = {
             Initialized = false,
@@ -28,11 +26,7 @@ if not getgenv().AutoFarmCore then
             ErrorCount = 0,
             LastErrorTime = 0,
             RetryCount = 0,
-            MaxRetries = 5,
-            BondsCollected = 0,
-            TotalRuntime = 0,
-            StuckCount = 0, -- Новое: счетчик застреваний
-            MaxStuckCount = 3 -- Новое: макс застреваний перед респавном
+            MaxRetries = 5
         },
         Connections = {},
         Cache = {
@@ -61,13 +55,13 @@ local state = core.State
 local constants = core.Constants
 local cache = core.Cache
 
+-- Кэширование сервисов
 cache.Services.Players = game:GetService("Players")
 cache.Services.Workspace = game:GetService("Workspace")
 cache.Services.TweenService = game:GetService("TweenService")
 cache.Services.ReplicatedStorage = game:GetService("ReplicatedStorage")
 cache.Services.RunService = game:GetService("RunService")
 cache.Services.ScriptContext = game:GetService("ScriptContext")
-cache.Services.UserInputService = game:GetService("UserInputService")
 
 local Players = cache.Services.Players
 local Workspace = cache.Services.Workspace
@@ -75,36 +69,14 @@ local TweenService = cache.Services.TweenService
 local ReplicatedStorage = cache.Services.ReplicatedStorage
 local RunService = cache.Services.RunService
 local ScriptContext = cache.Services.ScriptContext
-local UIS = cache.Services.UserInputService
 
+-- Логирование с меткой времени
 local function log(message, level)
     level = level or "INFO"
     print(string.format("[%s] [AutoFarm] [%s]: %s", os.date("%X"), level, message))
 end
 
-local function safeDisconnectAll()
-    for key, connection in pairs(core.Connections) do
-        if connection and typeof(connection) == "RBXScriptConnection" then
-            pcall(function()
-                connection:Disconnect()
-            end)
-        end
-        core.Connections[key] = nil
-    end
-end
-
-local function emergencyShutdown()
-    log("АВАРИЙНАЯ ОСТАНОВКА АКТИВИРОВАНА", "FATAL")
-    settings.AutoFarmEnabled = false
-    getgenv().autoFarmBond = false
-    getgenv().CollectBond = false
-    safeDisconnectAll()
-    if cache.GUI then
-        pcall(function() cache.GUI:Destroy() end)
-        cache.GUI = nil
-    end
-end
-
+-- Обработчик ошибок
 local function handleError(err, severity, shouldRetry)
     severity = severity or "ERROR"
     shouldRetry = shouldRetry or false
@@ -117,7 +89,7 @@ local function handleError(err, severity, shouldRetry)
             log(string.format("Попытка перезапуска %d/%d", state.RetryCount, state.MaxRetries), "WARN")
             safeDisconnectAll()
             task.wait(3)
-            initializeAutoFarm()
+            safeInitialize()
         else
             log("Достигнут лимит перезапусков. Скрипт остановлен.", "FATAL")
             settings.AutoFarmEnabled = false
@@ -125,6 +97,7 @@ local function handleError(err, severity, shouldRetry)
     end
 end
 
+-- Безопасное выполнение функции
 local function safeCall(func, ...)
     if not settings.AutoFarmEnabled then return false end
     local success, result = pcall(func, ...)
@@ -135,6 +108,7 @@ local function safeCall(func, ...)
     return result
 end
 
+-- Управление соединениями
 local function manageConnection(connection, key)
     if not settings.AutoFarmEnabled then 
         if connection then 
@@ -156,6 +130,18 @@ local function manageConnection(connection, key)
     return connection
 end
 
+local function safeDisconnectAll()
+    for key, connection in pairs(core.Connections) do
+        if connection and typeof(connection) == "RBXScriptConnection" then
+            pcall(function()
+                connection:Disconnect()
+            end)
+        end
+        core.Connections[key] = nil
+    end
+end
+
+-- Безопасное ожидание
 local function safeWait(duration)
     if not settings.AutoFarmEnabled then return false end
     local start = tick()
@@ -165,54 +151,7 @@ local function safeWait(duration)
     return settings.AutoFarmEnabled
 end
 
--- НОВОЕ: Функция проверки застревания
-local function checkIfStuck(operationName, startTime)
-    local currentTime = tick()
-    if currentTime - startTime > settings.OperationTimeout then
-        log(string.format("Застревание в операции: %s (%.1f сек)", operationName, currentTime - startTime), "WARN")
-        state.StuckCount = state.StuckCount + 1
-        return true
-    end
-    return false
-end
-
--- НОВОЕ: Принудительное освобождение персонажа
-local function forceReleaseCharacter(character)
-    if not character then return false end
-    
-    local humanoid = character:FindFirstChild("Humanoid")
-    local root = character:FindFirstChild("HumanoidRootPart")
-    
-    if humanoid and humanoid.Health > 0 then
-        -- Пытаемся выйти из транспорта
-        pcall(function()
-            humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
-            task.wait(0.2)
-            humanoid:ChangeState(Enum.HumanoidStateType.Running)
-        end)
-        
-        -- Сбрасываем анкор
-        if root then
-            pcall(function()
-                root.Anchored = false
-            end)
-        end
-        
-        -- Принудительно убиваем если много застреваний
-        if state.StuckCount >= state.MaxStuckCount then
-            log("Слишком много застреваний! Принудительный респавн...", "WARN")
-            pcall(function()
-                humanoid:ChangeState(Enum.HumanoidStateType.Dead)
-            end)
-            state.StuckCount = 0
-            return true
-        end
-        
-        return true
-    end
-    return false
-end
-
+-- Поиск в иерархии
 local function findInHierarchy(parent, path)
     if not parent then return nil end
     local current = parent
@@ -223,6 +162,7 @@ local function findInHierarchy(parent, path)
     return current
 end
 
+-- Проверка ошибок
 local function isTargetError(message)
     for _, pattern in ipairs(constants.ErrorPatterns) do
         if string.find(message, pattern) then
@@ -232,6 +172,7 @@ local function isTargetError(message)
     return false
 end
 
+-- Настройка обработчика ошибок
 local function setupErrorHandler()
     local function onErrorMessage(message, traceback, script)
         if not settings.AutoFarmEnabled then return end
@@ -268,15 +209,7 @@ local function setupErrorHandler()
     manageConnection(ScriptContext.Error:Connect(onErrorMessage), "error_handler")
 end
 
-local function setupEmergencyHotkey()
-    manageConnection(UIS.InputBegan:Connect(function(input, processed)
-        if processed then return end
-        if input.KeyCode == Enum.KeyCode.P and UIS:IsKeyDown(Enum.KeyCode.LeftShift) then
-            emergencyShutdown()
-        end
-    end), "emergency_hotkey")
-end
-
+-- Проверка времени фарма
 local function checkFarmTime(character)
     if not character then return false end
     
@@ -304,6 +237,7 @@ local function checkFarmTime(character)
     return false
 end
 
+-- Управление таймером фарма
 local function startFarmTimer()
     state.FarmStartTime = tick()
     state.FarmTimerActive = true
@@ -314,7 +248,6 @@ end
 local function stopFarmTimer()
     if state.FarmTimerActive then
         local elapsedTime = tick() - state.FarmStartTime
-        state.TotalRuntime = state.TotalRuntime + elapsedTime
         log(string.format("Таймер фарма остановлен. Прошло времени: %d секунд", 
             math.floor(elapsedTime)), "INFO")
         state.FarmTimerActive = false
@@ -322,107 +255,14 @@ local function stopFarmTimer()
     end
 end
 
-local function createControlPanel()
-    if cache.GUI then pcall(function() cache.GUI:Destroy() end) end
-    
-    local screenGui = Instance.new("ScreenGui")
-    screenGui.Name = "AutoFarmPanel"
-    screenGui.Parent = game:GetService("CoreGui")
-    
-    local frame = Instance.new("Frame")
-    frame.Size = UDim2.new(0, 300, 0, 200)
-    frame.Position = UDim2.new(0, 10, 0, 10)
-    frame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-    frame.BorderSizePixel = 0
-    frame.Parent = screenGui
-    
-    local title = Instance.new("TextLabel")
-    title.Size = UDim2.new(1, 0, 0, 30)
-    title.Text = "AutoFarm Control Panel"
-    title.TextColor3 = Color3.fromRGB(255, 255, 255)
-    title.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
-    title.Parent = frame
-    
-    local emergencyBtn = Instance.new("TextButton")
-    emergencyBtn.Size = UDim2.new(1, -20, 0, 30)
-    emergencyBtn.Position = UDim2.new(0, 10, 0, 40)
-    emergencyBtn.Text = "EMERGENCY STOP (Shift+P)"
-    emergencyBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    emergencyBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
-    emergencyBtn.Parent = frame
-    emergencyBtn.MouseButton1Click:Connect(emergencyShutdown)
-    
-    local statsLabel = Instance.new("TextLabel")
-    statsLabel.Size = UDim2.new(1, -20, 0, 60)
-    statsLabel.Position = UDim2.new(0, 10, 0, 80)
-    statsLabel.Text = "Бондов собрано: 0\nВремя работы: 0 сек\nЗастреваний: 0"
-    statsLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-    statsLabel.BackgroundTransparency = 1
-    statsLabel.TextXAlignment = Enum.TextXAlignment.Left
-    statsLabel.Parent = frame
-    cache.StatsLabel = statsLabel
-    
-    local respawnToggle = Instance.new("TextButton")
-    respawnToggle.Size = UDim2.new(1, -20, 0, 30)
-    respawnToggle.Position = UDim2.new(0, 10, 0, 150)
-    respawnToggle.Text = "AutoRespawn: ON"
-    respawnToggle.TextColor3 = Color3.fromRGB(255, 255, 255)
-    respawnToggle.BackgroundColor3 = Color3.fromRGB(50, 150, 50)
-    respawnToggle.Parent = frame
-    respawnToggle.MouseButton1Click:Connect(function()
-        settings.AutoRespawn = not settings.AutoRespawn
-        respawnToggle.Text = "AutoRespawn: " .. (settings.AutoRespawn and "ON" or "OFF")
-        respawnToggle.BackgroundColor3 = settings.AutoRespawn and Color3.fromRGB(50, 150, 50) or Color3.fromRGB(150, 50, 50)
-    end)
-    
-    cache.GUI = screenGui
-    return screenGui
-end
-
-local function updateStats()
-    if not cache.StatsLabel then return end
-    cache.StatsLabel.Text = string.format("Бондов собрано: %d\nВремя работы: %d сек\nПерезапусков: %d/%d\nЗастреваний: %d/%d",
-        state.BondsCollected,
-        math.floor(state.TotalRuntime + (state.FarmTimerActive and (tick() - state.FarmStartTime) or 0)),
-        state.RetryCount,
-        state.MaxRetries,
-        state.StuckCount,
-        state.MaxStuckCount
-    )
-end
-
-local function findNearestBond(position)
-    local runtime = Workspace:FindFirstChild("RuntimeItems")
-    if not runtime then return nil end
-    
-    local nearestBond = nil
-    local minDistance = math.huge
-    
-    for _, item in ipairs(runtime:GetChildren()) do
-        if not settings.AutoFarmEnabled then break end
-        if item:IsA("Model") and item.Name == constants.BondName then
-            local distance = (item:GetPivot().Position - position).Magnitude
-            if distance < minDistance then
-                minDistance = distance
-                nearestBond = item
-            end
-        end
-    end
-    
-    return nearestBond
-end
-
+-- Основная логика фарма
 local function initializeAutoFarm()
     if state.Initialized then return end
     state.Initialized = true
     
     setupErrorHandler()
-    setupEmergencyHotkey()
-    createControlPanel()
     
     while settings.AutoFarmEnabled do
-        updateStats()
-        
         if not state.GamePlaceId then
             while game.PlaceId == 0 and settings.AutoFarmEnabled do
                 safeWait(1)
@@ -479,17 +319,10 @@ local function initializeAutoFarm()
                 }
 
                 local function teleportTo(root, cf)
-                    local operationStart = tick()
                     return safeCall(function()
                         if not root or not root.Parent or not root:IsA("BasePart") then 
                             return false 
                         end
-                        
-                        if checkIfStuck("teleportTo", operationStart) then
-                            forceReleaseCharacter(root.Parent)
-                            return false
-                        end
-                        
                         root.Anchored = true
                         root.CFrame = cf
                         safeWait(3)
@@ -501,17 +334,10 @@ local function initializeAutoFarm()
                 end
 
                 local function tweenTo(root, cf)
-                    local operationStart = tick()
                     return safeCall(function()
                         if not root or not root.Parent or not root:IsA("BasePart") then 
                             return false 
                         end
-                        
-                        if checkIfStuck("tweenTo", operationStart) then
-                            forceReleaseCharacter(root.Parent)
-                            return false
-                        end
-                        
                         local distance = (root.Position - cf.Position).Magnitude
                         local duration = math.max(0.1, distance / settings.TweenSpeed)
                         local tween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Linear), {CFrame = cf})
@@ -527,10 +353,6 @@ local function initializeAutoFarm()
                     local foundGun = nil
                     
                     while not gunFound and tick() - startTime < timeout and settings.AutoFarmEnabled do
-                        if checkIfStuck("getLockedGun", startTime) then
-                            return nil
-                        end
-                        
                         local runtime = Workspace:FindFirstChild("RuntimeItems")
                         if runtime then
                             for _, v in ipairs(runtime:GetChildren()) do
@@ -556,14 +378,8 @@ local function initializeAutoFarm()
                 end
 
                 local function sitInGun(root)
-                    local operationStart = tick()
                     if not root or not root.Parent or not root:IsA("BasePart") then 
                         return false 
-                    end
-                    
-                    if checkIfStuck("sitInGun_precheck", operationStart) then
-                        forceReleaseCharacter(root.Parent)
-                        return false
                     end
                     
                     local gun = getLockedGunWithTimeout(settings.GunSearchTimeout)
@@ -578,12 +394,6 @@ local function initializeAutoFarm()
                             seat.Disabled = false 
                             safeWait(0.5)
                         end
-                        
-                        if checkIfStuck("sitInGun_teleport", operationStart) then
-                            forceReleaseCharacter(root.Parent)
-                            return false
-                        end
-                        
                         return teleportTo(root, seat.CFrame)
                     end
                     return false
@@ -598,17 +408,10 @@ local function initializeAutoFarm()
                 end
 
                 local function freezeMidAir(root)
-                    local operationStart = tick()
                     return safeCall(function()
                         if not root or not root.Parent or not root:IsA("BasePart") then 
                             return false 
                         end
-                        
-                        if checkIfStuck("freezeMidAir", operationStart) then
-                            forceReleaseCharacter(root.Parent)
-                            return false
-                        end
-                        
                         root.Anchored = true
                         root.CFrame = CFrame.new(root.Position + Vector3.new(0, 5, 0))
                         safeWait(1)
@@ -620,35 +423,21 @@ local function initializeAutoFarm()
                 end
 
                 local function tryTweenToBond(root)
-                    local operationStart = tick()
                     if not root or not root.Parent or not root:IsA("BasePart") then 
                         return false 
                     end
                     
-                    if checkIfStuck("tryTweenToBond", operationStart) then
-                        forceReleaseCharacter(root.Parent)
-                        return false
-                    end
-                    
                     local found = false
                     safeCall(function()
-                        if settings.PriorityTargeting then
-                            local nearestBond = findNearestBond(root.Position)
-                            if nearestBond then
-                                tweenTo(root, CFrame.new(nearestBond:GetPivot().Position + Vector3.new(0, 4, 0)))
+                        local runtime = Workspace:FindFirstChild("RuntimeItems")
+                        if not runtime then return end
+                        
+                        for _, v in ipairs(runtime:GetChildren()) do
+                            if not settings.AutoFarmEnabled then break end
+                            if v:IsA("Model") and v.Name == constants.BondName then
+                                tweenTo(root, CFrame.new(v:GetPivot().Position + Vector3.new(0, 4, 0)))
                                 found = true
-                            end
-                        else
-                            local runtime = Workspace:FindFirstChild("RuntimeItems")
-                            if not runtime then return end
-                            
-                            for _, v in ipairs(runtime:GetChildren()) do
-                                if not settings.AutoFarmEnabled then break end
-                                if v:IsA("Model") and v.Name == constants.BondName then
-                                    tweenTo(root, CFrame.new(v:GetPivot().Position + Vector3.new(0, 4, 0)))
-                                    found = true
-                                    break
-                                end
+                                break
                             end
                         end
                     end)
@@ -656,20 +445,12 @@ local function initializeAutoFarm()
                 end
 
                 local function setupGun(root, humanoid)
-                    local operationStart = tick()
                     if not root or not root.Parent or not root:IsA("BasePart") or not humanoid then 
                         return false 
                     end
                     
-                    if checkIfStuck("setupGun", operationStart) then
-                        forceReleaseCharacter(root.Parent)
-                        return false
-                    end
-                    
                     local success = safeCall(function()
-                        if not teleportTo(root, constants.GunCFrame) then
-                            return false
-                        end
+                        teleportTo(root, constants.GunCFrame)
                         
                         local gunSuccess = sitInGun(root)
                         if not gunSuccess then
@@ -680,11 +461,7 @@ local function initializeAutoFarm()
                         
                         safeWait(0.6)
                         jumpOff(humanoid)
-                        
-                        if not freezeMidAir(root) then
-                            return false
-                        end
-                        
+                        freezeMidAir(root)
                         safeWait(0.5)
                         
                         gunSuccess = sitInGun(root)
@@ -701,6 +478,7 @@ local function initializeAutoFarm()
                     return success or false
                 end
 
+                -- Collect Bond
                 local lastCollectTime = 0
                 local activateRemote = findInHierarchy(ReplicatedStorage, constants.ActivatePath)
                 
@@ -719,8 +497,6 @@ local function initializeAutoFarm()
                             if not settings.AutoFarmEnabled then break end
                             if bond:IsA("Model") and bond.Name == constants.BondName then
                                 activateRemote:FireServer(bond)
-                                state.BondsCollected = state.BondsCollected + 1
-                                updateStats()
                                 break
                             end
                         end
@@ -734,10 +510,6 @@ local function initializeAutoFarm()
                     local root, humanoid
                     
                     while tick() - startTime < 15 and settings.AutoFarmEnabled do
-                        if checkIfStuck("farmCharacter_wait", startTime) then
-                            return
-                        end
-                        
                         root = character:FindFirstChild("HumanoidRootPart")
                         humanoid = character:FindFirstChild("Humanoid")
                         
@@ -757,14 +529,7 @@ local function initializeAutoFarm()
                     local started = false
 
                     while humanoid.Health > 0 and settings.AutoFarmEnabled and state.IsInGame do
-                        updateStats()
-                        
                         if checkFarmTime(character) then
-                            break
-                        end
-                        
-                        if checkIfStuck("farmCharacter_loop", startTime) then
-                            forceReleaseCharacter(character)
                             break
                         end
                         
@@ -780,9 +545,7 @@ local function initializeAutoFarm()
                         local foundBond = tryTweenToBond(root)
                         if not foundBond then
                             if currentIndex <= #bondPoints then
-                                if not teleportTo(root, bondPoints[currentIndex]) then
-                                    break
-                                end
+                                teleportTo(root, bondPoints[currentIndex])
                                 currentIndex = currentIndex + 1
                             else
                                 safeCall(function()
@@ -798,11 +561,6 @@ local function initializeAutoFarm()
                     end
                     
                     stopFarmTimer()
-                    
-                    if settings.AutoRespawn and humanoid and humanoid.Health <= 0 then
-                        log("Персонаж умер. Ожидание респавна...", "INFO")
-                        safeWait(5)
-                    end
                 end
 
                 manageConnection(player.CharacterAdded:Connect(function(character)
@@ -811,12 +569,6 @@ local function initializeAutoFarm()
                         farmCharacter(character)
                     end
                 end), "character_added")
-
-                manageConnection(player.CharacterRemoving:Connect(function(character)
-                    if settings.AutoFarmEnabled and settings.AutoRespawn then
-                        log("Персонаж удален. Ожидание нового...", "INFO")
-                    end
-                end), "character_removed")
 
                 if player.Character then
                     safeWait(2)
@@ -843,7 +595,6 @@ local function initializeAutoFarm()
                 end), "userid_changed")
 
                 while state.IsInGame and settings.AutoFarmEnabled do
-                    updateStats()
                     safeWait(1)
                 end
 
@@ -862,6 +613,15 @@ local function initializeAutoFarm()
     end
 end
 
+-- Защищенный вызов с повторными попытками
+local function protectedCallWithRetry()
+    local success, err = pcall(initializeAutoFarm)
+    if not success then
+        handleError(err, "FATAL", true)
+    end
+end
+
+-- Мониторинг изменения PlaceId
 local function monitorPlaceId()
     while settings.AutoFarmEnabled do
         if state.GamePlaceId and game.PlaceId ~= 0 and game.PlaceId ~= state.GamePlaceId then
@@ -877,12 +637,7 @@ local function monitorPlaceId()
     end
 end
 
+-- Главная инициализация
 log("Скрипт инициализирован", "INFO")
-log("Экстренная остановка: Shift + P", "INFO")
-
-local success, err = pcall(initializeAutoFarm)
-if not success then
-    handleError(err, "FATAL", true)
-end
-
+protectedCallWithRetry()
 task.spawn(monitorPlaceId)
