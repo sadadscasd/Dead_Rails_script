@@ -84,9 +84,9 @@ end
 local function getTotalBonds()
     local totalBonds = 0
     
-    safeCall(function()
+    pcall(function()
         local player = Players.LocalPlayer
-        if not player then return 0 end
+        if not player then return end
         
         -- Проверяем инвентарь игрока
         local character = player.Character
@@ -110,47 +110,6 @@ local function getTotalBonds()
             for _, item in ipairs(backpack:GetChildren()) do
                 if item.Name == constants.BondName then
                     totalBonds = totalBonds + 1
-                end
-            end
-        end
-        
-        -- Проверяем PlayerGui на наличие интерфейса с бондами
-        local playerGui = player:FindFirstChild("PlayerGui")
-        if playerGui then
-            local screenGui = playerGui:FindFirstChild("ScreenGui")
-            if screenGui then
-                local bondCounter = screenGui:FindFirstChild("BondCounter")
-                if bondCounter and bondCounter:IsA("TextLabel") then
-                    local text = bondCounter.Text
-                    local count = tonumber(text:match("%d+"))
-                    if count then
-                        totalBonds = totalBonds + count
-                    end
-                end
-            end
-        end
-        
-        -- Проверяем ReplicatedStorage на наличие данных игрока
-        local playerData = ReplicatedStorage:FindFirstChild("PlayerData")
-        if playerData then
-            local playerStats = playerData:FindFirstChild(player.Name)
-            if playerStats then
-                local bondsValue = playerStats:FindFirstChild("Bonds")
-                if bondsValue and bondsValue:IsA("NumberValue") then
-                    totalBonds = totalBonds + bondsValue.Value
-                end
-            end
-        end
-        
-        -- Дополнительные места для поиска бондов
-        local runtimeItems = Workspace:FindFirstChild("RuntimeItems")
-        if runtimeItems then
-            for _, item in ipairs(runtimeItems:GetChildren()) do
-                if item:IsA("Model") and item.Name == constants.BondName then
-                    local owner = item:FindFirstChild("Owner")
-                    if owner and owner.Value == player then
-                        totalBonds = totalBonds + 1
-                    end
                 end
             end
         end
@@ -193,7 +152,7 @@ local function handleError(err, severity, shouldRetry)
             log(string.format("Попытка перезапуска %d/%d", state.RetryCount, state.MaxRetries), "WARN")
             safeDisconnectAll()
             task.wait(3)
-            safeInitialize()
+            initializeAutoFarm()
         else
             log("Достигнут лимит перезапусков. Скрипт остановлен.", "FATAL")
             settings.AutoFarmEnabled = false
