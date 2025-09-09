@@ -27,10 +27,8 @@ if not getgenv().AutoFarmCore then
             LastErrorTime = 0,
             RetryCount = 0,
             MaxRetries = 5,
-            TotalBondsCollected = 0,
-            SuccessfulRuns = 0,
-            CurrentRunBonds = 0,
-            LastBondCollectTime = 0
+            SuccessfulFarms = 0, -- Счетчик успешных фармов
+            TotalCollected = 0   -- Общий счетчик
         },
         Connections = {},
         Cache = {
@@ -105,10 +103,12 @@ local function log(message, level)
     print(string.format("[%s] [AutoFarm] [%s]: %s", os.date("%X"), level, message))
 end
 
--- Функция для отображения статистики бондов
-local function logBondStats()
-    log(string.format("Статистика бондов: Всего собрано %d за %d успешных фармов", 
-        state.TotalBondsCollected, state.SuccessfulRuns), "INFO")
+-- Функция обновления счетчиков
+local function updateCounters()
+    state.SuccessfulFarms = state.SuccessfulFarms + 1
+    state.TotalCollected = state.TotalCollected + 62
+    log(string.format("Успешный фарм! Добавлено: 62 | Всего фармов: %d | Общий счет: %d", 
+        state.SuccessfulFarms, state.TotalCollected), "SUCCESS")
 end
 
 -- Обработчик ошибок
@@ -197,7 +197,7 @@ local function findInHierarchy(parent, path)
     return current
 end
 
--- Проверка ошибок
+-- Проверка ошибки
 local function isTargetError(message)
     for _, pattern in ipairs(constants.ErrorPatterns) do
         if string.find(message, pattern) then
@@ -277,25 +277,14 @@ local function startFarmTimer()
     state.FarmStartTime = tick()
     state.FarmTimerActive = true
     state.WarningShown = false
-    state.CurrentRunBonds = 0
     log(string.format("Таймер фарма запущен (максимум %d секунд)", settings.MaxFarmTime), "INFO")
 end
 
 local function stopFarmTimer()
     if state.FarmTimerActive then
         local elapsedTime = tick() - state.FarmStartTime
-        
-        -- Проверяем успешность фарма (собрано более 50 бондов за run)
-        if state.CurrentRunBonds >= 50 then
-            state.SuccessfulRuns = state.SuccessfulRuns + 1
-            log(string.format("Успешный фарм! Собрано %d бондов за %d секунд", 
-                state.CurrentRunBonds, math.floor(elapsedTime)), "SUCCESS")
-        else
-            log(string.format("Фарм завершен. Собрано %d бондов за %d секунд", 
-                state.CurrentRunBonds, math.floor(elapsedTime)), "INFO")
-        end
-        
-        logBondStats()
+        log(string.format("Таймер фарма остановлен. Прошло времени: %d секунд", 
+            math.floor(elapsedTime)), "INFO")
         state.FarmTimerActive = false
         state.WarningShown = false
     end
@@ -538,7 +527,7 @@ local function initializeAutoFarm()
                     return success or false
                 end
 
-                -- Collect Bond с подсчетом
+                -- Collect Bond
                 local lastCollectTime = 0
                 local activateRemote = findInHierarchy(ReplicatedStorage, constants.ActivatePath)
                 
@@ -556,19 +545,6 @@ local function initializeAutoFarm()
                         for _, bond in ipairs(runtime:GetChildren()) do
                             if not settings.AutoFarmEnabled then break end
                             if bond:IsA("Model") and bond.Name == constants.BondName then
-                                -- Проверяем, чтобы не считать один и тот же бонд несколько раз
-                                if currentTime - state.LastBondCollectTime > 0.5 then
-                                    state.CurrentRunBonds = state.CurrentRunBonds + 1
-                                    state.TotalBondsCollected = state.TotalBondsCollected + 1
-                                    state.LastBondCollectTime = currentTime
-                                    
-                                    -- Периодически выводим статистику
-                                    if state.CurrentRunBonds % 10 == 0 then
-                                        log(string.format("Собрано бондов: %d (всего: %d)", 
-                                            state.CurrentRunBonds, state.TotalBondsCollected), "INFO")
-                                    end
-                                end
-                                
                                 activateRemote:FireServer(bond)
                                 break
                             end
@@ -660,6 +636,14 @@ local function initializeAutoFarm()
                     end
                 end)
 
+                -- Отслеживаем успешный фарм
+                manageConnection(Players.LocalPlayer.CharacterAdded:Connect(function(character)
+                    if settings.AutoFarmEnabled then
+                        task.wait(5) -- Ждем завершения фарма
+                        updateCounters() -- Обновляем счетчики
+                    end
+                end), "success_farm_tracker")
+
                 manageConnection(Players.LocalPlayer:GetPropertyChangedSignal("UserId"):Connect(function()
                     if game.PlaceId ~= state.GamePlaceId then
                         state.IsInGame = false
@@ -713,6 +697,8 @@ end
 -- Получаем информацию о пользователе и выводим в логах
 local username, displayName = getPlayerInfo()
 log(string.format("Инициализация скрипта для пользователя: %s (@%s)", displayName, username), "INFO")
+log(string.format("Текущие счетчики: Успешных фармов - %d, Общий счет - %d", 
+    state.SuccessfulFarms, state.TotalCollected), "INFO")
 
 -- Главная инициализация
 log("Скрипт инициализирован", "INFO")
