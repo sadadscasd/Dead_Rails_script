@@ -26,9 +26,7 @@ if not getgenv().AutoFarmCore then
             ErrorCount = 0,
             LastErrorTime = 0,
             RetryCount = 0,
-            MaxRetries = 5,
-            TotalBonds = 0,
-            MainValue = 0
+            MaxRetries = 5
         },
         Connections = {},
         Cache = {
@@ -82,216 +80,6 @@ local function getPlayerInfo()
     return "Unknown", "Unknown"
 end
 
--- Функция поиска значения "главный" в интерфейсе
-local function findMainValueInInterface()
-    local mainValue = 0
-    local player = Players.LocalPlayer
-    
-    if not player then return 0 end
-    
-    pcall(function()
-        local playerGui = player:FindFirstChild("PlayerGui")
-        if playerGui then
-            -- Ищем все ScreenGui в PlayerGui
-            for _, screenGui in ipairs(playerGui:GetChildren()) do
-                if screenGui:IsA("ScreenGui") then
-                    -- Ищем элементы с текстом "главный" и соседние числовые значения
-                    for _, descendant in ipairs(screenGui:GetDescendants()) do
-                        if descendant:IsA("TextLabel") or descendant:IsA("TextButton") or descendant:IsA("TextBox") then
-                            local text = descendant.Text
-                            
-                            -- Проверяем если это значение "главный"
-                            if text:lower():find("главный") or text:lower():find("main") then
-                                -- Ищем соседние элементы с числовыми значениями
-                                local parent = descendant.Parent
-                                if parent then
-                                    for _, sibling in ipairs(parent:GetChildren()) do
-                                        if sibling ~= descendant and (sibling:IsA("TextLabel") or sibling:IsA("TextButton")) then
-                                            local siblingText = sibling.Text
-                                            local numberValue = tonumber(siblingText:match("%d+"))
-                                            if numberValue then
-                                                mainValue = numberValue
-                                                log("Найдено значение 'главный': " .. mainValue, "INFO")
-                                                return mainValue
-                                            end
-                                        end
-                                    end
-                                end
-                                
-                                -- Ищем следующий элемент после "главный"
-                                local nextSibling = descendant:FindFirstChildWhichIsA("TextLabel") or descendant:FindFirstChildWhichIsA("TextButton")
-                                if nextSibling then
-                                    local nextText = nextSibling.Text
-                                    local numberValue = tonumber(nextText:match("%d+"))
-                                    if numberValue then
-                                        mainValue = numberValue
-                                        log("Найдено значение после 'главный': " .. mainValue, "INFO")
-                                        return mainValue
-                                    end
-                                end
-                            end
-                            
-                            -- Ищем табличную структуру (как на скриншоте)
-                            if text:find("главный") then
-                                -- Пытаемся найти следующую строку с числом
-                                local nextElement = descendant:FindNextSiblingWhichIsA("TextLabel")
-                                if nextElement then
-                                    local nextText = nextElement.Text
-                                    local numberValue = tonumber(nextText:match("%d+"))
-                                    if numberValue then
-                                        mainValue = numberValue
-                                        log("Найдено табличное значение 'главный': " .. mainValue, "INFO")
-                                        return mainValue
-                                    end
-                                end
-                            end
-                        end
-                    end
-                end
-            end
-        end
-    end)
-    
-    -- Дополнительный поиск в других местах
-    pcall(function()
-        -- Поиск в ReplicatedStorage
-        local gameData = ReplicatedStorage:FindFirstChild("GameData") or ReplicatedStorage:FindFirstChild("PlayerStats")
-        if gameData then
-            local mainStat = gameData:FindFirstChild("Main") or gameData:FindFirstChild("Главный")
-            if mainStat and mainStat:IsA("NumberValue") then
-                mainValue = mainStat.Value
-                log("Найдено значение 'главный' в GameData: " .. mainValue, "INFO")
-                return mainValue
-            end
-        end
-    end)
-    
-    return mainValue
-end
-
--- Функция поиска общего количества бондов в различных местах игры
-local function findTotalBondsInGame()
-    local totalBonds = 0
-    local player = Players.LocalPlayer
-    
-    if not player then return 0 end
-    
-    -- Поиск в ReplicatedStorage
-    pcall(function()
-        local playerData = ReplicatedStorage:FindFirstChild("PlayerData")
-        if playerData then
-            local playerStats = playerData:FindFirstChild(player.Name) or playerData:FindFirstChild("Player_" .. player.UserId)
-            if playerStats then
-                local bondsValue = playerStats:FindFirstChild("Bonds") or playerStats:FindFirstChild("TotalBonds") or playerStats:FindFirstChild("BondCount")
-                if bondsValue and bondsValue:IsA("NumberValue") then
-                    totalBonds = bondsValue.Value
-                    log("Найдены бонды в PlayerData: " .. totalBonds, "INFO")
-                    return totalBonds
-                end
-                
-                -- Проверка Folder на значения
-                for _, child in ipairs(playerStats:GetChildren()) do
-                    if child:IsA("NumberValue") and (child.Name:lower():find("bond") or child.Name:lower():find("money") or child.Name:lower():find("currency")) then
-                        totalBonds = child.Value
-                        log("Найдены бонды в NumberValue: " .. child.Name .. " = " .. totalBonds, "INFO")
-                        return totalBonds
-                    end
-                end
-            end
-        end
-    end)
-    
-    -- Поиск в PlayerGui
-    pcall(function()
-        local playerGui = player:FindFirstChild("PlayerGui")
-        if playerGui then
-            local screenGui = playerGui:FindFirstChildWhichIsA("ScreenGui")
-            if screenGui then
-                -- Поиск текстовых элементов с количеством бондов
-                local function searchForBondText(obj)
-                    if obj:IsA("TextLabel") or obj:IsA("TextButton") or obj:IsA("TextBox") then
-                        local text = obj.Text
-                        local bondCount = tonumber(text:match("%d+"))
-                        if bondCount and (text:lower():find("bond") or text:lower():find("бонд") or text:lower():find("money") or text:lower():find("деньги")) then
-                            totalBonds = bondCount
-                            log("Найдены бонды в интерфейсе: " .. totalBonds, "INFO")
-                            return true
-                        end
-                    end
-                    return false
-                end
-                
-                for _, child in ipairs(screenGui:GetDescendants()) do
-                    if searchForBondText(child) then
-                        return totalBonds
-                    end
-                end
-            end
-        end
-    end)
-    
-    -- Ручной подсчет физических бондов у игрока
-    pcall(function()
-        local physicalBonds = 0
-        
-        -- Инвентарь персонажа
-        local character = player.Character
-        if character then
-            local humanoid = character:FindFirstChild("Humanoid")
-            if humanoid then
-                local inventory = humanoid:FindFirstChild("Inventory")
-                if inventory then
-                    for _, item in ipairs(inventory:GetChildren()) do
-                        if item.Name == constants.BondName then
-                            physicalBonds = physicalBonds + 1
-                        end
-                    end
-                end
-            end
-        end
-        
-        -- Бэкпак игрока
-        local backpack = player:FindFirstChild("Backpack")
-        if backpack then
-            for _, item in ipairs(backpack:GetChildren()) do
-                if item.Name == constants.BondName then
-                    physicalBonds = physicalBonds + 1
-                end
-            end
-        end
-        
-        if physicalBonds > 0 then
-            totalBonds = totalBonds + physicalBonds
-            log("Найдены физические бонды: " .. physicalBonds, "INFO")
-        end
-    end)
-    
-    return totalBonds
-end
-
--- Функция для мониторинга изменений количества бондов
-local function setupBondsMonitor()
-    local player = Players.LocalPlayer
-    if not player then return end
-    
-    -- Мониторинг изменений в PlayerData
-    pcall(function()
-        local playerData = ReplicatedStorage:FindFirstChild("PlayerData")
-        if playerData then
-            local playerStats = playerData:FindFirstChild(player.Name) or playerData:FindFirstChild("Player_" .. player.UserId)
-            if playerStats then
-                local bondsValue = playerStats:FindFirstChild("Bonds")
-                if bondsValue and bondsValue:IsA("NumberValue") then
-                    manageConnection(bondsValue:GetPropertyChangedSignal("Value"):Connect(function()
-                        state.TotalBonds = bondsValue.Value
-                        log("Обновлено количество бондов: " .. state.TotalBonds, "INFO")
-                    end), "bonds_monitor")
-                end
-            end
-        end
-    end)
-end
-
 -- Функция разблокировки курсора
 local function unlockCursor()
     pcall(function()
@@ -304,7 +92,7 @@ local function unlockCursor()
     end)
 end
 
--- Запускаем разблокировка сразу
+-- Запускаем разблокировку сразу
 unlockCursor()
 
 -- Логирование с меткой времени
@@ -326,7 +114,7 @@ local function handleError(err, severity, shouldRetry)
             log(string.format("Попытка перезапуска %d/%d", state.RetryCount, state.MaxRetries), "WARN")
             safeDisconnectAll()
             task.wait(3)
-            initializeAutoFarm()
+            safeInitialize()
         else
             log("Достигнут лимит перезапусков. Скрипт остановлен.", "FATAL")
             settings.AutoFarmEnabled = false
@@ -488,6 +276,7 @@ local function stopFarmTimer()
         log(string.format("Таймер фарма остановлен. Прошло времени: %d секунд", 
             math.floor(elapsedTime)), "INFO")
         state.FarmTimerActive = false
+        state.WarningShown = false
     end
 end
 
@@ -497,27 +286,6 @@ local function initializeAutoFarm()
     state.Initialized = true
     
     setupErrorHandler()
-    setupBondsMonitor()
-    
-    -- Периодическая проверка количества бондов
-    task.spawn(function()
-        while settings.AutoFarmEnabled do
-            local newBonds = findTotalBondsInGame()
-            if newBonds > 0 and newBonds ~= state.TotalBonds then
-                state.TotalBonds = newBonds
-                log("Обновлено общее количество бондов: " .. state.TotalBonds, "INFO")
-            end
-            
-            -- Периодическая проверка значения "главный"
-            local newMainValue = findMainValueInInterface()
-            if newMainValue > 0 and newMainValue ~= state.MainValue then
-                state.MainValue = newMainValue
-                log("Обновлено значение 'главный': " .. state.MainValue, "INFO")
-            end
-            
-            safeWait(10)
-        end
-    end)
     
     -- Запускаем отдельный поток для разблокировки курсора
     task.spawn(function()
@@ -908,19 +676,9 @@ local function monitorPlaceId()
     end
 end
 
--- Получаем информацию о пользователе
+-- Получаем информацию о пользователе и выводим в логах
 local username, displayName = getPlayerInfo()
-
--- Ищем общее количество бондов в игре
-state.TotalBonds = findTotalBondsInGame()
-
--- Ищем значение "главный" в интерфейсе
-state.MainValue = findMainValueInInterface()
-
--- Выводим информацию в логах
 log(string.format("Инициализация скрипта для пользователя: %s (@%s)", displayName, username), "INFO")
-log(string.format("Общее количество бондов на аккаунте: %d", state.TotalBonds), "INFO")
-log(string.format("Значение 'главный' из меню: %d", state.MainValue), "INFO")
 
 -- Главная инициализация
 log("Скрипт инициализирован", "INFO")
