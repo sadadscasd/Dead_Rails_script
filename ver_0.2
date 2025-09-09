@@ -26,9 +26,7 @@ if not getgenv().AutoFarmCore then
             ErrorCount = 0,
             LastErrorTime = 0,
             RetryCount = 0,
-            MaxRetries = 5,
-            SuccessfulFarms = 0, -- Счетчик успешных фармов
-            TotalCollected = 0   -- Общий счетчик
+            MaxRetries = 5
         },
         Connections = {},
         Cache = {
@@ -82,6 +80,85 @@ local function getPlayerInfo()
     return "Unknown", "Unknown"
 end
 
+-- Функция получения количества бондов
+local function getTotalBonds()
+    local totalBonds = 0
+    
+    safeCall(function()
+        local player = Players.LocalPlayer
+        if not player then return 0 end
+        
+        -- Проверяем инвентарь игрока
+        local character = player.Character
+        if character then
+            local humanoid = character:FindFirstChild("Humanoid")
+            if humanoid then
+                local inventory = humanoid:FindFirstChild("Inventory")
+                if inventory then
+                    for _, item in ipairs(inventory:GetChildren()) do
+                        if item.Name == constants.BondName then
+                            totalBonds = totalBonds + 1
+                        end
+                    end
+                end
+            end
+        end
+        
+        -- Проверяем Backpack
+        local backpack = player:FindFirstChild("Backpack")
+        if backpack then
+            for _, item in ipairs(backpack:GetChildren()) do
+                if item.Name == constants.BondName then
+                    totalBonds = totalBonds + 1
+                end
+            end
+        end
+        
+        -- Проверяем PlayerGui на наличие интерфейса с бондами
+        local playerGui = player:FindFirstChild("PlayerGui")
+        if playerGui then
+            local screenGui = playerGui:FindFirstChild("ScreenGui")
+            if screenGui then
+                local bondCounter = screenGui:FindFirstChild("BondCounter")
+                if bondCounter and bondCounter:IsA("TextLabel") then
+                    local text = bondCounter.Text
+                    local count = tonumber(text:match("%d+"))
+                    if count then
+                        totalBonds = totalBonds + count
+                    end
+                end
+            end
+        end
+        
+        -- Проверяем ReplicatedStorage на наличие данных игрока
+        local playerData = ReplicatedStorage:FindFirstChild("PlayerData")
+        if playerData then
+            local playerStats = playerData:FindFirstChild(player.Name)
+            if playerStats then
+                local bondsValue = playerStats:FindFirstChild("Bonds")
+                if bondsValue and bondsValue:IsA("NumberValue") then
+                    totalBonds = totalBonds + bondsValue.Value
+                end
+            end
+        end
+        
+        -- Дополнительные места для поиска бондов
+        local runtimeItems = Workspace:FindFirstChild("RuntimeItems")
+        if runtimeItems then
+            for _, item in ipairs(runtimeItems:GetChildren()) do
+                if item:IsA("Model") and item.Name == constants.BondName then
+                    local owner = item:FindFirstChild("Owner")
+                    if owner and owner.Value == player then
+                        totalBonds = totalBonds + 1
+                    end
+                end
+            end
+        end
+    end)
+    
+    return totalBonds
+end
+
 -- Функция разблокировки курсора
 local function unlockCursor()
     pcall(function()
@@ -101,14 +178,6 @@ unlockCursor()
 local function log(message, level)
     level = level or "INFO"
     print(string.format("[%s] [AutoFarm] [%s]: %s", os.date("%X"), level, message))
-end
-
--- Функция обновления счетчиков
-local function updateCounters()
-    state.SuccessfulFarms = state.SuccessfulFarms + 1
-    state.TotalCollected = state.TotalCollected + 62
-    log(string.format("Успешный фарм! Добавлено: 62 | Всего фармов: %d | Общий счет: %d", 
-        state.SuccessfulFarms, state.TotalCollected), "SUCCESS")
 end
 
 -- Обработчик ошибок
@@ -197,7 +266,7 @@ local function findInHierarchy(parent, path)
     return current
 end
 
--- Проверка ошибки
+-- Проверка ошибок
 local function isTargetError(message)
     for _, pattern in ipairs(constants.ErrorPatterns) do
         if string.find(message, pattern) then
@@ -636,14 +705,6 @@ local function initializeAutoFarm()
                     end
                 end)
 
-                -- Отслеживаем успешный фарм
-                manageConnection(Players.LocalPlayer.CharacterAdded:Connect(function(character)
-                    if settings.AutoFarmEnabled then
-                        task.wait(5) -- Ждем завершения фарма
-                        updateCounters() -- Обновляем счетчики
-                    end
-                end), "success_farm_tracker")
-
                 manageConnection(Players.LocalPlayer:GetPropertyChangedSignal("UserId"):Connect(function()
                     if game.PlaceId ~= state.GamePlaceId then
                         state.IsInGame = false
@@ -694,11 +755,13 @@ local function monitorPlaceId()
     end
 end
 
--- Получаем информацию о пользователе и выводим в логах
+-- Получаем информацию о пользователе и количество бондов
 local username, displayName = getPlayerInfo()
+local totalBonds = getTotalBonds()
+
+-- Выводим информацию в логах
 log(string.format("Инициализация скрипта для пользователя: %s (@%s)", displayName, username), "INFO")
-log(string.format("Текущие счетчики: Успешных фармов - %d, Общий счет - %d", 
-    state.SuccessfulFarms, state.TotalCollected), "INFO")
+log(string.format("Общее количество бондов на аккаунте: %d", totalBonds), "INFO")
 
 -- Главная инициализация
 log("Скрипт инициализирован", "INFO")
