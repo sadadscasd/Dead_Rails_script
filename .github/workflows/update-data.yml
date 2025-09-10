@@ -1,0 +1,43 @@
+name: Update Access Data
+
+on:
+  workflow_dispatch: # Ручной запуск
+  schedule:
+    - cron: '0 */6 * * *' # Каждые 6 часов
+  push:
+    paths:
+      - 'data/access_data_local.json' # Запуск при изменении локального файла
+
+jobs:
+  update-access-data:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Разрешение на запись в репозиторий
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+
+    - name: Install dependencies
+      run: pip install requests
+
+    - name: Run update script
+      env:
+        GITHUB_TOKEN: ${{ secrets.TOKEN_GIT }}
+        GITHUB_ACTOR: ${{ github.actor }}
+      run: python scripts/update_data.py
+
+    - name: Commit and push if changed
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add access_data.json
+        git diff --staged --quiet || git commit -m "Auto-update access data [skip ci]"
+        git push
