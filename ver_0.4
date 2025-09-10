@@ -31,7 +31,7 @@ if not _G.AutoFarmCore then
 			FirstRun = true,
 			GitHubRepo = "sadadscasd/Dead_Rails_script",
 			GitHubDataFile = "access_data.json",
-			LocalDataFileName = "AutoFarm_LocalData.json"
+			LocalData = {} -- Храним данные в памяти вместо файла
 		},
 		Connections = {},
 		Cache = {
@@ -48,9 +48,7 @@ if not _G.AutoFarmCore then
 				"attempt to iterate over a nil value",
 				"WeaponController",
 				"ReplicatedStorage.Client.Game.Controllers"
-			},
-			LocalDataFileName = "AutoFarm_LocalData.json",
-			GitHubLocalFile = "data/access_data_local.json"
+			}
 		}
 	}
 end
@@ -105,70 +103,44 @@ local function generateAccessKey(userId, username)
 	return formattedKey
 end
 
--- Функция для работы с локальным JSON файлом
+-- Функция для работы с локальными данными (в памяти)
 local function loadLocalData()
-	local success, data = pcall(function()
-		if isfile and isfile(constants.LocalDataFileName) then
-			return HttpService:JSONDecode(readfile(constants.LocalDataFileName))
-		end
-		return {}
-	end)
-	return success and data or {}
+	return state.LocalData or {}
 end
 
 local function saveLocalData(data)
-	local success, err = pcall(function()
-		if writefile then
-			writefile(constants.LocalDataFileName, HttpService:JSONEncode(data))
-		end
-	end)
-	return success
+	state.LocalData = data
+	return true
 end
 
--- Функция для сохранения данных в локальный файл для GitHub Actions
+-- Функция для сохранения данных для GitHub (в памяти)
 local function saveDataForGitHub(userData)
-	local success, err = pcall(function()
-		-- Создаем папку data если её нет
-		if makefolder and not isfolder("data") then
-			makefolder("data")
-		end
-		
-		local localDataFile = constants.GitHubLocalFile
-		local currentData = {}
-		
-		-- Читаем существующие данные
-		if isfile and isfolder("data") and isfile(localDataFile) then
-			local content = readfile(localDataFile)
-			currentData = HttpService:JSONDecode(content)
-		end
-		
-		-- Обновляем или добавляем данные
-		local userExists = false
-		for i, data in ipairs(currentData) do
-			if data.userId == userData.userId then
-				currentData[i] = userData
-				userExists = true
-				break
-			end
-		end
-		
-		if not userExists then
-			table.insert(currentData, userData)
-		end
-		
-		-- Сохраняем обратно
-		if writefile then
-			writefile(localDataFile, HttpService:JSONEncode(currentData))
-		end
-		
-		return true
-	end)
+	-- В обычном Roblox мы не можем создавать файлы, поэтому просто храним в памяти
+	-- Это будет работать только если скрипт запущен в исполнителе с файловыми функциями
+	state.GitHubData = state.GitHubData or {}
 	
-	if not success then
-		log("Ошибка сохранения данных для GitHub: " .. tostring(err), "WARN")
+	-- Обновляем или добавляем данные
+	local userExists = false
+	for i, data in ipairs(state.GitHubData) do
+		if data.userId == userData.userId then
+			state.GitHubData[i] = userData
+			userExists = true
+			break
+		end
 	end
 	
-	return success
+	if not userExists then
+		table.insert(state.GitHubData, userData)
+	end
+	
+	-- Показываем инструкцию для пользователя
+	log("Данные сохранены в памяти. Для обновления GitHub:", "INFO")
+	log("1. Перейдите в репозиторий: https://github.com/sadadscasd/Dead_Rails_script", "INFO")
+	log("2. Вручную обновите файл access_data.json", "INFO")
+	log("Данные для копирования:", "INFO")
+	print(HttpService:JSONEncode(state.GitHubData))
+	
+	return true
 end
 
 -- Функция получения информации о игроке
@@ -328,7 +300,7 @@ local function createKeyInputGUI(userAccessKey)
 			
 			-- Сохраняем оба файла
 			if saveLocalData(localData) and saveDataForGitHub(userData) then
-				statusLabel.Text = "Данные сохранены! GitHub обновит автоматически."
+				statusLabel.Text = "Данные сохранены! Проверьте консоль для инструкций."
 				state.KeyVerified = true
 				task.wait(2)
 				screenGui:Destroy()
@@ -435,7 +407,7 @@ local function handleError(err, severity, shouldRetry)
 			log(string.format("Попытка перезапуска %d/%d", state.RetryCount, state.MaxRetries), "WARN")
 			safeDisconnectAll()
 			task.wait(3)
-			safeInitialize()
+			initializeAutoFarm()
 		else
 			log("Достигнут лимит перезапусков. Скрипт остановлен.", "FATAL")
 			settings.AutoFarmEnabled = false
@@ -635,7 +607,7 @@ local function initializeAutoFarm()
 		
 		local isInGame = game.PlaceId == state.GamePlaceId
 		
-		if isInGame and settings.AutoFarmEnabled do
+		if isInGame and settings.AutoFarmEnabled then
 			log("Запуск автофарма в игре...", "INFO")
 			state.IsInGame = true
 			
