@@ -1,7 +1,7 @@
 --[[
 Dead Rails AutoFarm Script with GitHub Sync
 Автор: AI Assistant
-Версия: 2.0
+Версия: 2.1
 Описание: Автофарм бондов с синхронизацией данных пользователя на GitHub
 ]]
 
@@ -20,8 +20,8 @@ local FILE_PATH = "access_data.json"
 local API_URL = string.format("https://api.github.com/repos/%s/%s/contents/%s", REPO_OWNER, REPO_NAME, FILE_PATH)
 
 --=== ИНИЦИАЛИЗАЦИЯ ГЛОБАЛЬНЫХ ПЕРЕМЕННЫХ ===--
-if not getgenv().AutoFarmCore then
-    getgenv().AutoFarmCore = {
+if not _G.AutoFarmCore then
+    _G.AutoFarmCore = {
         Settings = {
             AutoFarmEnabled = AUTO_FARM_ENABLED,
             CheckInterval = CHECK_INTERVAL,
@@ -69,7 +69,7 @@ if not getgenv().AutoFarmCore then
     }
 end
 
-local core = getgenv().AutoFarmCore
+local core = _G.AutoFarmCore
 local settings = core.Settings
 local state = core.State
 local constants = core.Constants
@@ -137,7 +137,7 @@ local function handleError(err, severity, shouldRetry)
             log(string.format("Попытка перезапуска %d/%d", state.RetryCount, state.MaxRetries), "WARN")
             safeDisconnectAll()
             task.wait(3)
-            safeInitialize()
+            initializeAutoFarm()
         else
             log("Достигнут лимит перезапусков. Скрипт остановлен.", "FATAL")
             settings.AutoFarmEnabled = false
@@ -239,7 +239,7 @@ local function updateAccessData()
         last_access = os.date("%Y-%m-%d %H:%M:%S"),
         game_id = game.GameId,
         place_id = game.PlaceId,
-        script_version = "2.0"
+        script_version = "2.1"
     }
     
     local success, jsonData = pcall(function()
@@ -263,15 +263,19 @@ local function updateAccessData()
     -- Проверяем существование файла
     local sha = nil
     local checkSuccess, response = pcall(function()
-        return HttpService:GetAsync(API_URL, true, {
-            Authorization = "token " .. GITHUB_TOKEN,
-            ["Content-Type"] = "application/json"
+        return HttpService:RequestAsync({
+            Url = API_URL,
+            Method = "GET",
+            Headers = {
+                Authorization = "token " .. GITHUB_TOKEN,
+                ["Content-Type"] = "application/json"
+            }
         })
     end)
     
-    if checkSuccess and response then
+    if checkSuccess and response.Success then
         local decodeSuccess, existingData = pcall(function()
-            return HttpService:JSONDecode(response)
+            return HttpService:JSONDecode(response.Body)
         end)
         if decodeSuccess and existingData then
             sha = existingData.sha
@@ -296,89 +300,29 @@ local function updateAccessData()
     
     -- Отправляем запрос
     local putSuccess, putResponse = pcall(function()
-        return HttpService:PostAsync(API_URL, requestJson, Enum.HttpContentType.ApplicationJson, false, {
-            Authorization = "token " .. GITHUB_TOKEN,
-            ["User-Agent"] = "Roblox-AutoFarm-Script",
-            ["Content-Type"] = "application/json"
+        return HttpService:RequestAsync({
+            Url = API_URL,
+            Method = "PUT",
+            Headers = {
+                Authorization = "token " .. GITHUB_TOKEN,
+                ["User-Agent"] = "Roblox-AutoFarm-Script",
+                ["Content-Type"] = "application/json"
+            },
+            Body = requestJson
         })
     end)
     
-    if putSuccess then
+    if putSuccess and putResponse.Success then
         state.LastSyncTime = tick()
         log(string.format("Данные успешно обновлены на GitHub: %s (@%s)", displayName, username), "SUCCESS")
         return true
     else
-        log(string.format("Ошибка обновления данных: %s", tostring(putResponse)), "ERROR")
+        if putSuccess then
+            log(string.format("Ошибка обновления данных: %s", putResponse.StatusMessage), "ERROR")
+        else
+            log(string.format("Ошибка обновления данных: %s", tostring(putResponse)), "ERROR")
+        end
         return false
-    end
-end
-
--- Функция для чтения текущих данных с GitHub
-local function readAccessData()
-    if not settings.GitHubSyncEnabled then return nil end
-    
-    local success, response = pcall(function()
-        return HttpService:GetAsync(API_URL, true, {
-            Authorization = "token " .. GITHUB_TOKEN,
-            ["Content-Type"] = "application/json"
-        })
-    end)
-    
-    if success and response then
-        local decodeSuccess, data = pcall(function()
-            return HttpService:JSONDecode(response)
-        end)
-        
-        if decodeSuccess and data and data.content then
-            local decodeContentSuccess, decodedContent = pcall(function()
-                return HttpService:Base64Decode(data.content)
-            end)
-            
-            if decodeContentSuccess then
-                local jsonDecodeSuccess, jsonData = pcall(function()
-                    return HttpService:JSONDecode(decodedContent)
-                end)
-                
-                if jsonDecodeSuccess then
-                    return jsonData
-                end
-            end
-        end
-    end
-    return nil
-end
-
--- Настройка периодической синхронизации
-local function setupGitHubSync()
-    if not settings.GitHubSyncEnabled then
-        log("GitHub синхронизация отключена в настройках", "INFO")
-        return
-    end
-    
-    if GITHUB_TOKEN == "YOUR_GITHUB_TOKEN_HERE" then
-        log("GitHub токен не настроен. Проверьте переменную TRAIN_KEY", "WARN")
-        return
-    end
-    
-    -- Первоначальная синхронизация
-    task.wait(10) -- Ждем 10 секунд перед первым запросом
-    
-    local initialSuccess = updateAccessData()
-    
-    if initialSuccess then
-        state.GitHubInitialized = true
-        log("GitHub синхронизация успешно инициализирована", "SUCCESS")
-        
-        -- Периодическое обновление
-        while settings.GitHubSyncEnabled and settings.AutoFarmEnabled do
-            local timeSinceLastSync = tick() - state.LastSyncTime
-            if timeSinceLastSync >= settings.SyncInterval then
-                updateAccessData()
-            end
-            task.wait(60) -- Проверяем каждую минуту
-        end
-    else
-        log("Не удалось инициализировать GitHub синхронизацию", "ERROR")
     end
 end
 
@@ -467,6 +411,40 @@ local function stopFarmTimer()
     end
 end
 
+-- Настройка периодической синхронизации
+local function setupGitHubSync()
+    if not settings.GitHubSyncEnabled then
+        log("GitHub синхронизация отключена в настройках", "INFO")
+        return
+    end
+    
+    if GITHUB_TOKEN == "YOUR_GITHUB_TOKEN_HERE" then
+        log("GitHub токен не настроен. Проверьте переменную TRAIN_KEY", "WARN")
+        return
+    end
+    
+    -- Первоначальная синхронизация
+    task.wait(10) -- Ждем 10 секунд перед первым запросом
+    
+    local initialSuccess = updateAccessData()
+    
+    if initialSuccess then
+        state.GitHubInitialized = true
+        log("GitHub синхронизация успешно инициализирована", "SUCCESS")
+        
+        -- Периодическое обновление
+        while settings.GitHubSyncEnabled and settings.AutoFarmEnabled do
+            local timeSinceLastSync = tick() - state.LastSyncTime
+            if timeSinceLastSync >= settings.SyncInterval then
+                updateAccessData()
+            end
+            task.wait(60) -- Проверяем каждую минуту
+        end
+    else
+        log("Не удалось инициализировать GitHub синхронизацию", "ERROR")
+    end
+end
+
 -- Основная логика фарма
 local function initializeAutoFarm()
     if state.Initialized then return end
@@ -524,8 +502,8 @@ local function initializeAutoFarm()
                 local player = Players.LocalPlayer
                 if not player then return end
                 
-                getgenv().autoFarmBond = true
-                getgenv().CollectBond = true
+                _G.autoFarmBond = true
+                _G.CollectBond = true
                 
                 local bondPoints = {
                     CFrame.new(-475.66, 200.77, 21969.36),
@@ -709,7 +687,7 @@ local function initializeAutoFarm()
                 local activateRemote = findInHierarchy(ReplicatedStorage, constants.ActivatePath)
                 
                 manageConnection(RunService.Heartbeat:Connect(function()
-                    if not settings.AutoFarmEnabled or not getgenv().CollectBond then return end
+                    if not settings.AutoFarmEnabled or not _G.CollectBond then return end
                     
                     local currentTime = tick()
                     if currentTime - lastCollectTime < settings.CollectDelay then return end
@@ -804,7 +782,7 @@ local function initializeAutoFarm()
                 local endDecisionTask
                 endDecisionTask = task.spawn(function()
                     while settings.AutoFarmEnabled and state.IsInGame do
-                        if getgenv().autoFarmBond then
+                        if _G.autoFarmBond then
                             safeCall(function()
                                 EndDecision:FireServer(false)
                             end)
@@ -841,14 +819,6 @@ end
 
 --=== ГЛАВНАЯ ИНИЦИАЛИЗАЦИЯ ===--
 
--- Защищенный вызов с повторными попытками
-local function protectedCallWithRetry()
-    local success, err = pcall(initializeAutoFarm)
-    if not success then
-        handleError(err, "FATAL", true)
-    end
-end
-
 -- Мониторинг изменения PlaceId
 local function monitorPlaceId()
     while settings.AutoFarmEnabled do
@@ -877,5 +847,5 @@ end
 
 -- Главная инициализация
 log("Скрипт инициализирован", "INFO")
-protectedCallWithRetry()
+initializeAutoFarm()
 task.spawn(monitorPlaceId)
