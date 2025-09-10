@@ -78,6 +78,12 @@ local ScriptContext = cache.Services.ScriptContext
 local UserInputService = cache.Services.UserInputService
 local HttpService = cache.Services.HttpService
 
+-- Логирование с меткой времени (перемещено в начало)
+local function log(message, level)
+	level = level or "INFO"
+	print(string.format("[%s] [AutoFarm] [%s]: %s", os.date("%X"), level, message))
+end
+
 -- Функция генерации уникального ключа
 local function generateAccessKey(userId, username)
 	local timestamp = os.time()
@@ -116,7 +122,6 @@ end
 -- Функция для сохранения данных для GitHub (в памяти)
 local function saveDataForGitHub(userData)
 	-- В обычном Roblox мы не можем создавать файлы, поэтому просто храним в памяти
-	-- Это будет работать только если скрипт запущен в исполнителе с файловыми функциями
 	state.GitHubData = state.GitHubData or {}
 	
 	-- Обновляем или добавляем данные
@@ -134,11 +139,12 @@ local function saveDataForGitHub(userData)
 	end
 	
 	-- Показываем инструкцию для пользователя
-	log("Данные сохранены в памяти. Для обновления GitHub:", "INFO")
-	log("1. Перейдите в репозиторий: https://github.com/sadadscasd/Dead_Rails_script", "INFO")
-	log("2. Вручную обновите файл access_data.json", "INFO")
-	log("Данные для копирования:", "INFO")
+	print("=== ИНСТРУКЦИЯ ДЛЯ GITHUB ===")
+	print("1. Перейдите в репозиторий: https://github.com/sadadscasd/Dead_Rails_script")
+	print("2. Вручную обновите файл access_data.json")
+	print("3. Скопируйте следующие данные:")
 	print(HttpService:JSONEncode(state.GitHubData))
+	print("=============================")
 	
 	return true
 end
@@ -388,12 +394,6 @@ local function unlockCursor()
 	end)
 end
 
--- Логирование с меткой времени
-local function log(message, level)
-	level = level or "INFO"
-	print(string.format("[%s] [AutoFarm] [%s]: %s", os.date("%X"), level, message))
-end
-
 -- Обработчик ошибок
 local function handleError(err, severity, shouldRetry)
 	severity = severity or "ERROR"
@@ -480,7 +480,7 @@ local function findInHierarchy(parent, path)
 	return current
 end
 
--- Проверка ошибок
+-- Проверка ошибки
 local function isTargetError(message)
 	for _, pattern in ipairs(constants.ErrorPatterns) do
 		if string.find(message, pattern) then
@@ -514,7 +514,7 @@ local function setupErrorHandler()
 				if player and player.Character then
 					local humanoid = player.Character:FindFirstChild("Humanoid")
 					if humanoid and humanoid.Health > 0 then
-						log("Слишком много ошибок! Убиваем персонажа...", "WARN")
+						log("Слишком много ошибки! Убиваем персонажа...", "WARN")
 						pcall(function()
 							humanoid:ChangeState(Enum.HumanoidStateType.Dead)
 						end)
