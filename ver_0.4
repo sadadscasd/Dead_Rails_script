@@ -29,9 +29,9 @@ if not _G.AutoFarmCore then
 			MaxRetries = 5,
 			KeyVerified = false,
 			FirstRun = true,
-			GitHubToken = "TOKEN_GIT",
 			GitHubRepo = "sadadscasd/Dead_Rails_script",
-			GitHubDataFile = "access_data.json"
+			GitHubDataFile = "access_data.json",
+			LocalDataFileName = "AutoFarm_LocalData.json"
 		},
 		Connections = {},
 		Cache = {
@@ -49,7 +49,8 @@ if not _G.AutoFarmCore then
 				"WeaponController",
 				"ReplicatedStorage.Client.Game.Controllers"
 			},
-			LocalDataFileName = "AutoFarm_LocalData.json"
+			LocalDataFileName = "AutoFarm_LocalData.json",
+			GitHubLocalFile = "data/access_data_local.json"
 		}
 	}
 end
@@ -121,6 +122,52 @@ local function saveLocalData(data)
 			writefile(constants.LocalDataFileName, HttpService:JSONEncode(data))
 		end
 	end)
+	return success
+end
+
+-- Функция для сохранения данных в локальный файл для GitHub Actions
+local function saveDataForGitHub(userData)
+	local success, err = pcall(function()
+		-- Создаем папку data если её нет
+		if makefolder and not isfolder("data") then
+			makefolder("data")
+		end
+		
+		local localDataFile = constants.GitHubLocalFile
+		local currentData = {}
+		
+		-- Читаем существующие данные
+		if isfile and isfolder("data") and isfile(localDataFile) then
+			local content = readfile(localDataFile)
+			currentData = HttpService:JSONDecode(content)
+		end
+		
+		-- Обновляем или добавляем данные
+		local userExists = false
+		for i, data in ipairs(currentData) do
+			if data.userId == userData.userId then
+				currentData[i] = userData
+				userExists = true
+				break
+			end
+		end
+		
+		if not userExists then
+			table.insert(currentData, userData)
+		end
+		
+		-- Сохраняем обратно
+		if writefile then
+			writefile(localDataFile, HttpService:JSONEncode(currentData))
+		end
+		
+		return true
+	end)
+	
+	if not success then
+		log("Ошибка сохранения данных для GitHub: " .. tostring(err), "WARN")
+	end
+	
 	return success
 end
 
@@ -251,45 +298,42 @@ local function createKeyInputGUI(userAccessKey)
 			
 			-- Сохраняем данные пользователя
 			local username, userId, displayName = getPlayerInfo()
+			local currentTime = os.date("%Y-%m-%d %H:%M:%S")
+			
+			local userData = {
+				username = username,
+				userId = userId,
+				displayName = displayName,
+				accessKey = userAccessKey,
+				keyVerified = true,
+				firstAccess = currentTime,
+				lastAccess = currentTime
+			}
 			
 			-- Обновляем локальные данные
 			local localData = loadLocalData()
 			local userExists = false
 			
-			for i, userData in ipairs(localData) do
-				if userData.userId == userId then
-					localData[i] = {
-						username = username,
-						userId = userId,
-						displayName = displayName,
-						accessKey = userAccessKey,
-						keyVerified = true,
-						firstAccess = os.date("%Y-%m-%d %H:%M:%S"),
-						lastAccess = os.date("%Y-%m-%d %H:%M:%S")
-					}
+			for i, data in ipairs(localData) do
+				if data.userId == userId then
+					localData[i] = userData
 					userExists = true
 					break
 				end
 			end
 			
 			if not userExists then
-				table.insert(localData, {
-					username = username,
-					userId = userId,
-					displayName = displayName,
-					accessKey = userAccessKey,
-					keyVerified = true,
-					firstAccess = os.date("%Y-%m-%d %H:%M:%S"),
-					lastAccess = os.date("%Y-%m-%d %H:%M:%S")
-				})
+				table.insert(localData, userData)
 			end
 			
-			if saveLocalData(localData) then
+			-- Сохраняем оба файла
+			if saveLocalData(localData) and saveDataForGitHub(userData) then
+				statusLabel.Text = "Данные сохранены! GitHub обновит автоматически."
 				state.KeyVerified = true
-				task.wait(1)
+				task.wait(2)
 				screenGui:Destroy()
 			else
-				statusLabel.Text = "Ошибка сохранения локальных данных!"
+				statusLabel.Text = "Ошибка сохранения данных!"
 			end
 		else
 			statusLabel.Text = "Неверный ключ доступа!"
@@ -591,7 +635,7 @@ local function initializeAutoFarm()
 		
 		local isInGame = game.PlaceId == state.GamePlaceId
 		
-		if isInGame and settings.AutoFarmEnabled then
+		if isInGame and settings.AutoFarmEnabled do
 			log("Запуск автофарма в игре...", "INFO")
 			state.IsInGame = true
 			
@@ -953,6 +997,35 @@ local function monitorPlaceId()
 	end
 end
 
+-- Функция для обновления времени последнего доступа
+local function updateLastAccessTime()
+    local username, userId, displayName = getPlayerInfo()
+    local currentTime = os.date("%Y-%m-%d %H:%M:%S")
+    
+    local userData = {
+        username = username,
+        userId = userId,
+        displayName = displayName,
+        accessKey = getUserAccessKey(),
+        keyVerified = true,
+        firstAccess = currentTime,
+        lastAccess = currentTime
+    }
+    
+    -- Обновляем локально
+    local localData = loadLocalData()
+    for i, data in ipairs(localData) do
+        if data.userId == userId then
+            userData.firstAccess = data.firstAccess -- Сохраняем оригинальное время первого доступа
+            localData[i] = userData
+            break
+        end
+    end
+    
+    saveLocalData(localData)
+    saveDataForGitHub(userData)
+end
+
 -- Главная инициализация
 local function main()
 	local username, userId, displayName = getPlayerInfo()
@@ -964,6 +1037,9 @@ local function main()
 		log("Доступ не предоставлен. Скрипт остановлен.", "ERROR")
 		return
 	end
+	
+	-- Обновляем время последнего доступа
+	updateLastAccessTime()
 	
 	log("Доступ подтвержден. Запуск скрипта...", "INFO")
 	protectedCallWithRetry()
